@@ -1,0 +1,170 @@
+// Supabase/Postgres schema for this app's own writes. Mirrors the `vehicle`
+// schema definitions owned by the sibling app `grfmxstatusupdate` (same
+// Supabase project) - this file exists ONLY for Prisma Client generation
+// here, it is NOT the source of truth for migrations.
+//
+// IMPORTANT: never run `prisma migrate` from this repo. All schema changes
+// to the `vehicle` Postgres schema are made from grfmxstatusupdate's own
+// prisma/schema.prisma + `prisma migrate dev`, since it's the established
+// owner of migration history for this schema (it also owns `gr_dms` for
+// its own collections). If a model here needs to change, make the change
+// in grfmxstatusupdate first, run its migration, then copy the resulting
+// model block back into this file and run `npx prisma generate` (not
+// `migrate`) here.
+//
+// `mongoId` on every model is nullable/unique - the same cross-referencing
+// convention grfmxstatusupdate uses during its own Mongo/Postgres dual-write
+// window, so mismatches can be traced back to a specific Mongo document.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+  schemas   = ["vehicle"]
+}
+
+model Vehicle {
+  id      BigInt  @id @default(autoincrement())
+  mongoId String? @unique @map("mongo_id")
+
+  year            Int?
+  make            String?
+  model           String?
+  plate           String
+  engine          String?
+  chasis          String?
+  status          String    @default("active")
+  fuelType        String?   @map("fuel_type")
+  acquisitionDate DateTime? @map("acquisition_date")
+  currentMileage  Decimal   @default(0) @map("current_mileage") @db.Decimal(10, 2)
+  lastService     DateTime? @map("last_service")
+  nextService     DateTime? @map("next_service")
+  createdAt       DateTime? @default(now()) @map("created_at")
+
+  maintenanceLogs MaintenanceLog[]
+  roadTaxes       RoadTax[]
+  fuelLogs        FuelLog[]
+  insurances      Insurance[]
+  locations       Location[]
+  mileageLogs     MileageLog[]
+
+  @@map("vehicles")
+  @@schema("vehicle")
+}
+
+model MaintenanceLog {
+  id      BigInt  @id @default(autoincrement())
+  mongoId String? @unique @map("mongo_id")
+
+  vehicleId          BigInt    @map("vehicle_id")
+  vehicle            Vehicle   @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  date               DateTime
+  description        String
+  odometer           Decimal   @db.Decimal(10, 2)
+  nextServiceMileage Decimal?  @map("next_service_mileage") @db.Decimal(10, 2)
+  serviceProvider    String?   @map("service_provider")
+  cost               Decimal?  @db.Decimal(12, 2)
+  nextServiceDue     DateTime? @map("next_service_due")
+  notes              String?
+  createdAt          DateTime? @default(now()) @map("created_at")
+
+  @@index([vehicleId])
+  @@map("maintenance_logs")
+  @@schema("vehicle")
+}
+
+model RoadTax {
+  id      BigInt  @id @default(autoincrement())
+  mongoId String? @unique @map("mongo_id")
+
+  vehicleId   BigInt    @map("vehicle_id")
+  vehicle     Vehicle   @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  taxId       String    @map("tax_id")
+  renewalDate DateTime  @map("renewal_date")
+  expiryDate  DateTime  @map("expiry_date")
+  cost        Decimal   @db.Decimal(12, 2)
+  agent       String?
+  notes       String?
+  createdAt   DateTime? @default(now()) @map("created_at")
+
+  @@index([vehicleId])
+  @@map("road_taxes")
+  @@schema("vehicle")
+}
+
+model FuelLog {
+  id      BigInt  @id @default(autoincrement())
+  mongoId String? @unique @map("mongo_id")
+
+  vehicleId     BigInt    @map("vehicle_id")
+  vehicle       Vehicle   @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  receiptNumber String    @map("receipt_number")
+  date          DateTime
+  driver        String
+  cost          Decimal   @db.Decimal(12, 2)
+  amount        String
+  notes         String?
+  createdAt     DateTime? @default(now()) @map("created_at")
+
+  @@index([vehicleId])
+  @@map("fuel_logs")
+  @@schema("vehicle")
+}
+
+model Insurance {
+  id      BigInt  @id @default(autoincrement())
+  mongoId String? @unique @map("mongo_id")
+
+  vehicleId   BigInt    @map("vehicle_id")
+  vehicle     Vehicle   @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  insuranceId String    @map("insurance_id")
+  provider    String
+  renewalDate DateTime  @map("renewal_date")
+  expiryDate  DateTime  @map("expiry_date")
+  cost        Decimal   @db.Decimal(12, 2)
+  agent       String?
+  notes       String?
+  createdAt   DateTime? @default(now()) @map("created_at")
+
+  @@index([vehicleId])
+  @@map("insurances")
+  @@schema("vehicle")
+}
+
+model Location {
+  id      BigInt  @id @default(autoincrement())
+  mongoId String? @unique @map("mongo_id")
+
+  vehicleId BigInt    @map("vehicle_id")
+  vehicle   Vehicle   @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  fromDate  DateTime  @map("from_date")
+  toDate    DateTime  @map("to_date")
+  location  String
+  agent     String?
+  notes     String?
+  createdAt DateTime? @default(now()) @map("created_at")
+
+  @@index([vehicleId])
+  @@map("locations")
+  @@schema("vehicle")
+}
+
+model MileageLog {
+  id      BigInt  @id @default(autoincrement())
+  mongoId String? @unique @map("mongo_id")
+
+  vehicleId BigInt    @map("vehicle_id")
+  vehicle   Vehicle   @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  date      DateTime
+  mileage   Decimal   @db.Decimal(10, 2)
+  notes     String?
+  createdAt DateTime? @default(now()) @map("created_at")
+
+  @@index([vehicleId])
+  @@map("mileage_logs")
+  @@schema("vehicle")
+}
