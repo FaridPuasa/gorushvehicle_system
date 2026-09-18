@@ -1,58 +1,12 @@
 const express = require('express');
-const mongoose = require('mongoose');
 const bodyParser = require('body-parser');
 const path = require('path');
 require('dotenv').config();
 const cors = require('cors');
 
-// Postgres/Supabase dual-write (migration to the shared Supabase project
-// grfmxstatusupdate also migrates into, `vehicle` schema). Off by default -
-// see dualWrite.js. Postgres write failures never fail the Mongo request;
-// they're caught and logged only.
-const prisma = require('./prismaClient');
-const { isDualWriteEnabled } = require('./dualWrite');
-
-async function dualWriteUpsert(collectionName, prismaModel, mongoId, data) {
-    if (!isDualWriteEnabled(collectionName)) return;
-    try {
-        await prismaModel.upsert({
-            where: { mongoId },
-            create: { mongoId, ...data },
-            update: data,
-        });
-    } catch (err) {
-        console.error(`[Postgres dual-write] ${collectionName} upsert failed for mongoId=${mongoId}:`, err.message);
-    }
-}
-
-async function dualWriteDelete(collectionName, prismaModel, mongoId) {
-    if (!isDualWriteEnabled(collectionName)) return;
-    try {
-        await prismaModel.deleteMany({ where: { mongoId } });
-    } catch (err) {
-        console.error(`[Postgres dual-write] ${collectionName} delete failed for mongoId=${mongoId}:`, err.message);
-    }
-}
-
-// Every child log's vehicleId is a Mongo ObjectId - resolves it to the
-// matching Postgres Vehicle row's bigint id via the mongoId cross-reference.
-// Returns null if that vehicle hasn't been dual-written/backfilled into
-// Postgres yet, in which case the caller must skip its own dual-write
-// (the FK constraint would fail otherwise).
-async function getPgVehicleId(mongoVehicleId) {
-    if (!isDualWriteEnabled('vehicles') && !isDualWriteEnabled('maintenanceLogs') && !isDualWriteEnabled('roadTaxes') &&
-        !isDualWriteEnabled('fuelLogs') && !isDualWriteEnabled('insurances') && !isDualWriteEnabled('locations') &&
-        !isDualWriteEnabled('mileageLogs')) return null;
-    if (!mongoVehicleId) return null;
-    try {
-        const v = await prisma.vehicle.findUnique({ where: { mongoId: mongoVehicleId.toString() }, select: { id: true } });
-        return v ? v.id : null;
-    } catch (err) {
-        console.error('[Postgres dual-write] getPgVehicleId lookup failed:', err.message);
-        return null;
-    }
-}
-
+// Postgres-only data access - fully cut over from Mongo 2026-09-18. See
+// postgresVehicleSystem.js's header for the parity check this was based on.
+const db = require('./postgresVehicleSystem');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -62,146 +16,11 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname)));
 
-// Middleware
-app.use(bodyParser.json());
-app.use(express.static(path.join(__dirname)));
-
-// MongoDB Connection
-const MONGODB_URI = process.env.MONGODB_URI;
-
-mongoose.connect(MONGODB_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true
-})
-.then(() => console.log('MongoDB connected successfully'))
-.catch(err => console.error('MongoDB connection error:', err));
-
-// Define Mongoose Schemas
-const vehicleSchema = new mongoose.Schema({
-    year: Number,
-    make: String,
-    model: String,
-    plate: { type: String, required: true },
-    engine: String,
-    chasis: String,
-    status: { type: String, default: 'active' },
-    fuelType: String,
-    acquisitionDate: Date,
-    currentMileage: { type: Number, default: 0 },
-    lastService: Date,
-    nextService: Date,
-    createdAt: { type: Date, default: Date.now }
-});
-
-//maintenance log schema
-const maintenanceLogSchema = new mongoose.Schema({
-    vehicleId: { 
-        type: mongoose.Schema.Types.ObjectId, 
-        ref: 'Vehicle',
-        required: true
-    },
-    date: { type: Date, required: true },
-    description: { type: String, required: true },
-    odometer: { type: Number, required: true },
-    nextServiceMileage: { type: Number, required: false },
-    serviceProvider: String,
-    cost: Number,
-    nextServiceDue: Date,
-    notes: String,
-    createdAt: { type: Date, default: Date.now }
-});
-
-//road tax schema
-const roadTaxSchema = new mongoose.Schema({
-    vehicleId: { 
-        type: mongoose.Schema.Types.ObjectId, 
-        ref: 'Vehicle',
-        required: true
-    },
-    taxId: { type: String, required: true },
-    renewalDate: { type: Date, required: true },
-    expiryDate: { type: Date, required: true },
-    cost: { type: Number, required: true },
-    agent: String,
-    notes: String,
-    createdAt: { type: Date, default: Date.now }
-});
-
-// fuel log schema
-const fuelLogSchema = new mongoose.Schema({
-    vehicleId: { 
-        type: mongoose.Schema.Types.ObjectId, 
-        ref: 'Vehicle',
-        required: true
-    },
-    receiptNumber: { type: String, required: true },
-    date: { type: Date, required: true },
-    driver: { type: String, required: true },
-    cost: { type: Number, required: true },
-    amount: { type: String, required: true },
-    notes: String,
-    createdAt: { type: Date, default: Date.now }
-});
-
-// insurance schema
-const insuranceSchema = new mongoose.Schema({
-    vehicleId: { 
-        type: mongoose.Schema.Types.ObjectId, 
-        ref: 'Vehicle',
-        required: true
-    },
-    insuranceId: { type: String, required: true },
-    provider: { type: String, required: true },
-    renewalDate: { type: Date, required: true },
-    expiryDate: { type: Date, required: true },
-    cost: { type: Number, required: true },
-    agent: String,
-    notes: String,
-    createdAt: { type: Date, default: Date.now }
-});
-
-// location schema
-const locationSchema = new mongoose.Schema({
-    vehicleId: { 
-        type: mongoose.Schema.Types.ObjectId, 
-        ref: 'Vehicle',
-        required: true
-    },
-    fromDate: { type: Date, required: true },
-    toDate: { type: Date, required: true },
-    location: { type: String, required: true },
-    agent: String,
-    notes: String,
-    createdAt: { type: Date, default: Date.now }
-});
-
-// daily mileage schema
-const mileageLogSchema = new mongoose.Schema({
-    vehicleId: { 
-        type: mongoose.Schema.Types.ObjectId, 
-        ref: 'Vehicle',
-        required: true
-    },
-    date: { type: Date, required: true, default: Date.now },
-    mileage: { type: Number, required: true },
-    notes: String,
-    createdAt: { type: Date, default: Date.now }
-});
-
-// Create models
-const Vehicle = mongoose.model('Vehicle', vehicleSchema);
-const MaintenanceLog = mongoose.model('MaintenanceLog', maintenanceLogSchema);
-const RoadTax = mongoose.model('RoadTax', roadTaxSchema);
-const FuelLog = mongoose.model('FuelLog', fuelLogSchema);
-const Insurance = mongoose.model('Insurance', insuranceSchema);
-const Location = mongoose.model('Location', locationSchema);
-const MileageLog = mongoose.model('MileageLog', mileageLogSchema);
-
 // API Routes
 
 app.get('/api/vehicles', async (req, res) => {
     try {
-        const vehicles = await Vehicle.find().sort({ createdAt: -1 });
+        const vehicles = await db.findAllVehicles();
         res.json(vehicles);
     } catch (error) {
         console.error('Error fetching vehicles:', error);
@@ -211,7 +30,7 @@ app.get('/api/vehicles', async (req, res) => {
 
 app.get('/api/vehicles/:id', async (req, res) => {
     try {
-        const vehicle = await Vehicle.findById(req.params.id);
+        const vehicle = await db.findVehicleById(req.params.id);
         if (!vehicle) {
             return res.status(404).json({ message: 'Vehicle not found' });
         }
@@ -222,33 +41,9 @@ app.get('/api/vehicles/:id', async (req, res) => {
     }
 });
 
-
-// POST a new vehicle
-// Builds the Postgres-shaped payload from a Vehicle Mongo document.
-function vehicleToPgData(doc) {
-    return {
-        year: doc.year ?? null,
-        make: doc.make ?? null,
-        model: doc.model ?? null,
-        plate: doc.plate,
-        engine: doc.engine ?? null,
-        chasis: doc.chasis ?? null,
-        status: doc.status || 'active',
-        fuelType: doc.fuelType ?? null,
-        acquisitionDate: doc.acquisitionDate ?? null,
-        currentMileage: doc.currentMileage ?? 0,
-        lastService: doc.lastService ?? null,
-        nextService: doc.nextService ?? null,
-    };
-}
-
 app.post('/api/vehicles', async (req, res) => {
     try {
-        const newVehicle = new Vehicle(req.body);
-        const savedVehicle = await newVehicle.save();
-
-        dualWriteUpsert('vehicles', prisma.vehicle, savedVehicle._id.toString(), vehicleToPgData(savedVehicle));
-
+        const savedVehicle = await db.createVehicle(req.body);
         res.status(201).json(savedVehicle);
     } catch (error) {
         console.error('Error adding vehicle:', error);
@@ -264,17 +59,11 @@ app.put('/api/vehicles/:id', async (req, res) => {
             return res.status(400).json({ message: 'Engine information is required' });
         }
 
-        const updatedVehicle = await Vehicle.findByIdAndUpdate(
-            req.params.id,
-            req.body,
-            { new: true, runValidators: true }
-        );
+        const updatedVehicle = await db.updateVehicle(req.params.id, req.body);
 
         if (!updatedVehicle) {
             return res.status(404).json({ message: 'Vehicle not found' });
         }
-
-        await dualWriteUpsert('vehicles', prisma.vehicle, updatedVehicle._id.toString(), vehicleToPgData(updatedVehicle));
 
         res.json(updatedVehicle);
     } catch (error) {
@@ -283,28 +72,15 @@ app.put('/api/vehicles/:id', async (req, res) => {
     }
 });
 
-// Delete vehicle
+// Delete vehicle - Postgres cascade delete (onDelete: Cascade on every
+// child table's vehicleId FK) handles all associated records automatically.
 app.delete('/api/vehicles/:id', async (req, res) => {
     try {
-        const deletedVehicle = await Vehicle.findByIdAndDelete(req.params.id);
+        const deletedVehicle = await db.deleteVehicle(req.params.id);
 
         if (!deletedVehicle) {
             return res.status(404).json({ message: 'Vehicle not found' });
         }
-
-        // Delete all associated records
-        await Promise.all([
-            MaintenanceLog.deleteMany({ vehicleId: req.params.id }),
-            RoadTax.deleteMany({ vehicleId: req.params.id }),
-            FuelLog.deleteMany({ vehicleId: req.params.id }),
-            Insurance.deleteMany({ vehicleId: req.params.id }),
-            Location.deleteMany({ vehicleId: req.params.id })
-        ]);
-
-        // Postgres side: deleting the Vehicle row cascades to every child
-        // table (onDelete: Cascade in schema.prisma) - no need to delete
-        // each child model separately here.
-        await dualWriteDelete('vehicles', prisma.vehicle, req.params.id);
 
         res.json({ message: 'Vehicle and all associated records deleted successfully' });
     } catch (error) {
@@ -316,10 +92,7 @@ app.delete('/api/vehicles/:id', async (req, res) => {
 // GET maintenance logs for a vehicle
 app.get('/api/vehicles/:id/logs', async (req, res) => {
     try {
-        const logs = await MaintenanceLog.find({ 
-            vehicleId: req.params.id 
-        }).sort({ date: -1 });
-        
+        const logs = await db.findMaintenanceLogsForVehicle(req.params.id);
         res.json(logs);
     } catch (error) {
         console.error('Error fetching maintenance logs:', error);
@@ -330,12 +103,12 @@ app.get('/api/vehicles/:id/logs', async (req, res) => {
 // GET a specific log entry
 app.get('/api/logs/:id', async (req, res) => {
     try {
-        const log = await MaintenanceLog.findById(req.params.id);
-        
+        const log = await db.findMaintenanceLogById(req.params.id);
+
         if (!log) {
             return res.status(404).json({ message: 'Maintenance log not found' });
         }
-        
+
         res.json(log);
     } catch (error) {
         console.error('Error fetching maintenance log:', error);
@@ -343,65 +116,23 @@ app.get('/api/logs/:id', async (req, res) => {
     }
 });
 
-// POST a new maintenance log
-function maintenanceLogToPgData(doc, pgVehicleId) {
-    return {
-        vehicleId: pgVehicleId,
-        date: doc.date,
-        description: doc.description,
-        odometer: doc.odometer,
-        nextServiceMileage: doc.nextServiceMileage ?? null,
-        serviceProvider: doc.serviceProvider ?? null,
-        cost: doc.cost ?? null,
-        nextServiceDue: doc.nextServiceDue ?? null,
-        notes: doc.notes ?? null,
-    };
-}
-
-// Applies the same lastService/nextService/currentMileage patch to the
-// Postgres Vehicle row, skipping silently if that vehicle isn't in
-// Postgres yet (dual-write hasn't backfilled/created it).
-async function dualWriteVehicleServiceUpdate(mongoVehicleId, data) {
-    if (!isDualWriteEnabled('vehicles')) return;
-    const pgVehicleId = await getPgVehicleId(mongoVehicleId);
-    if (!pgVehicleId) return;
-    try {
-        await prisma.vehicle.update({ where: { id: pgVehicleId }, data });
-    } catch (err) {
-        console.error(`[Postgres dual-write] vehicles service-update failed for mongoId=${mongoVehicleId}:`, err.message);
-    }
-}
-
 app.post('/api/logs', async (req, res) => {
     try {
-
         req.body.nextServiceMileage = req.body.odometer + 7000;
 
-        const newLog = new MaintenanceLog(req.body);
-        const savedLog = await newLog.save();
+        const result = await db.createMaintenanceLog(req.body);
+        if (result.error === 'vehicle_not_found') {
+            return res.status(404).json({ message: 'Vehicle not found' });
+        }
 
         // Update vehicle with latest service information
-        await Vehicle.findByIdAndUpdate(req.body.vehicleId, {
-            lastService: req.body.date,
-            nextService: req.body.nextServiceDue,
-            currentMileage: req.body.odometer
-        });
-
-        if (isDualWriteEnabled('maintenanceLogs')) {
-            const pgVehicleId = await getPgVehicleId(savedLog.vehicleId);
-            if (pgVehicleId) {
-                await dualWriteUpsert('maintenanceLogs', prisma.maintenanceLog, savedLog._id.toString(), maintenanceLogToPgData(savedLog, pgVehicleId));
-            } else {
-                console.error(`[Postgres dual-write] maintenanceLogs upsert skipped for mongoId=${savedLog._id}: vehicle mongoId=${savedLog.vehicleId} not found in Postgres`);
-            }
-        }
-        await dualWriteVehicleServiceUpdate(req.body.vehicleId, {
+        await db.updateVehicleServiceInfo(req.body.vehicleId, {
             lastService: req.body.date,
             nextService: req.body.nextServiceDue,
             currentMileage: req.body.odometer,
         });
 
-        res.status(201).json(savedLog);
+        res.status(201).json(result.log);
     } catch (error) {
         console.error('Error adding maintenance log:', error);
         res.status(500).json({ message: 'Failed to add maintenance log' });
@@ -414,41 +145,17 @@ app.put('/api/logs/:id', async (req, res) => {
         // Calculate next service mileage
         req.body.nextServiceMileage = req.body.odometer + 7000;
 
-        const updatedLog = await MaintenanceLog.findByIdAndUpdate(
-            req.params.id,
-            req.body,
-            { new: true, runValidators: true }
-        );
+        const updatedLog = await db.updateMaintenanceLog(req.params.id, req.body);
 
         if (!updatedLog) {
             return res.status(404).json({ message: 'Maintenance log not found' });
         }
 
         // Update vehicle with latest service information if this is the most recent log
-        const mostRecentLog = await MaintenanceLog.findOne({
-            vehicleId: updatedLog.vehicleId
-        }).sort({ date: -1 });
+        const mostRecentLog = await db.findMostRecentMaintenanceLog(updatedLog.vehicleId);
 
-        let vehicleServiceUpdated = false;
-        if (mostRecentLog && mostRecentLog._id.toString() === updatedLog._id.toString()) {
-            await Vehicle.findByIdAndUpdate(updatedLog.vehicleId, {
-                lastService: updatedLog.date,
-                nextService: updatedLog.nextServiceDue,
-                currentMileage: updatedLog.odometer
-            });
-            vehicleServiceUpdated = true;
-        }
-
-        if (isDualWriteEnabled('maintenanceLogs')) {
-            const pgVehicleId = await getPgVehicleId(updatedLog.vehicleId);
-            if (pgVehicleId) {
-                await dualWriteUpsert('maintenanceLogs', prisma.maintenanceLog, updatedLog._id.toString(), maintenanceLogToPgData(updatedLog, pgVehicleId));
-            } else {
-                console.error(`[Postgres dual-write] maintenanceLogs upsert skipped for mongoId=${updatedLog._id}: vehicle mongoId=${updatedLog.vehicleId} not found in Postgres`);
-            }
-        }
-        if (vehicleServiceUpdated) {
-            await dualWriteVehicleServiceUpdate(updatedLog.vehicleId, {
+        if (mostRecentLog && mostRecentLog._id === updatedLog._id) {
+            await db.updateVehicleServiceInfo(updatedLog.vehicleId, {
                 lastService: updatedLog.date,
                 nextService: updatedLog.nextServiceDue,
                 currentMileage: updatedLog.odometer,
@@ -465,40 +172,25 @@ app.put('/api/logs/:id', async (req, res) => {
 // DELETE a maintenance log
 app.delete('/api/logs/:id', async (req, res) => {
     try {
-        const log = await MaintenanceLog.findById(req.params.id);
+        const log = await db.findMaintenanceLogById(req.params.id);
 
         if (!log) {
             return res.status(404).json({ message: 'Maintenance log not found' });
         }
 
-        const deletedLog = await MaintenanceLog.findByIdAndDelete(req.params.id);
+        await db.deleteMaintenanceLog(req.params.id);
 
         // Update vehicle's last service information if needed
-        const mostRecentLog = await MaintenanceLog.findOne({
-            vehicleId: log.vehicleId
-        }).sort({ date: -1 });
+        const mostRecentLog = await db.findMostRecentMaintenanceLog(log.vehicleId);
 
         if (mostRecentLog) {
-            await Vehicle.findByIdAndUpdate(log.vehicleId, {
-                lastService: mostRecentLog.date,
-                nextService: mostRecentLog.nextServiceDue
-            });
-        } else {
-            // No logs left, clear the service dates
-            await Vehicle.findByIdAndUpdate(log.vehicleId, {
-                lastService: null,
-                nextService: null
-            });
-        }
-
-        await dualWriteDelete('maintenanceLogs', prisma.maintenanceLog, req.params.id);
-        if (mostRecentLog) {
-            await dualWriteVehicleServiceUpdate(log.vehicleId, {
+            await db.updateVehicleServiceInfo(log.vehicleId, {
                 lastService: mostRecentLog.date,
                 nextService: mostRecentLog.nextServiceDue,
             });
         } else {
-            await dualWriteVehicleServiceUpdate(log.vehicleId, {
+            // No logs left, clear the service dates
+            await db.updateVehicleServiceInfo(log.vehicleId, {
                 lastService: null,
                 nextService: null,
             });
@@ -514,10 +206,7 @@ app.delete('/api/logs/:id', async (req, res) => {
 // GET road tax logs for a vehicle
 app.get('/api/vehicles/:id/taxes', async (req, res) => {
     try {
-        const taxes = await RoadTax.find({ 
-            vehicleId: req.params.id 
-        }).sort({ expiryDate: -1 });
-        
+        const taxes = await db.findRoadTaxesForVehicle(req.params.id);
         res.json(taxes);
     } catch (error) {
         console.error('Error fetching road tax logs:', error);
@@ -528,12 +217,12 @@ app.get('/api/vehicles/:id/taxes', async (req, res) => {
 // GET a specific road tax entry
 app.get('/api/taxes/:id', async (req, res) => {
     try {
-        const tax = await RoadTax.findById(req.params.id);
-        
+        const tax = await db.findRoadTaxById(req.params.id);
+
         if (!tax) {
             return res.status(404).json({ message: 'Road tax entry not found' });
         }
-        
+
         res.json(tax);
     } catch (error) {
         console.error('Error fetching road tax entry:', error);
@@ -541,40 +230,13 @@ app.get('/api/taxes/:id', async (req, res) => {
     }
 });
 
-// POST a new road tax entry
-// Shared dual-write for the 4 simple vehicle-child models (RoadTax, FuelLog,
-// Insurance, Location) - none of these have Vehicle-side side effects like
-// MaintenanceLog does, so create/update both just need vehicleId resolved
-// and upserted; delete just needs the mongoId.
-async function dualWriteChildUpsert(collectionName, prismaModel, doc, dataWithoutVehicleId) {
-    if (!isDualWriteEnabled(collectionName)) return;
-    const pgVehicleId = await getPgVehicleId(doc.vehicleId);
-    if (!pgVehicleId) {
-        console.error(`[Postgres dual-write] ${collectionName} upsert skipped for mongoId=${doc._id}: vehicle mongoId=${doc.vehicleId} not found in Postgres`);
-        return;
-    }
-    await dualWriteUpsert(collectionName, prismaModel, doc._id.toString(), { vehicleId: pgVehicleId, ...dataWithoutVehicleId });
-}
-
-function roadTaxToPgData(doc) {
-    return {
-        taxId: doc.taxId,
-        renewalDate: doc.renewalDate,
-        expiryDate: doc.expiryDate,
-        cost: doc.cost,
-        agent: doc.agent ?? null,
-        notes: doc.notes ?? null,
-    };
-}
-
 app.post('/api/taxes', async (req, res) => {
     try {
-        const newTax = new RoadTax(req.body);
-        const savedTax = await newTax.save();
-
-        await dualWriteChildUpsert('roadTaxes', prisma.roadTax, savedTax, roadTaxToPgData(savedTax));
-
-        res.status(201).json(savedTax);
+        const result = await db.createRoadTax(req.body);
+        if (result.error === 'vehicle_not_found') {
+            return res.status(404).json({ message: 'Vehicle not found' });
+        }
+        res.status(201).json(result.entry);
     } catch (error) {
         console.error('Error adding road tax entry:', error);
         res.status(500).json({ message: 'Failed to add road tax entry' });
@@ -584,17 +246,11 @@ app.post('/api/taxes', async (req, res) => {
 // PUT (update) a road tax entry
 app.put('/api/taxes/:id', async (req, res) => {
     try {
-        const updatedTax = await RoadTax.findByIdAndUpdate(
-            req.params.id,
-            req.body,
-            { new: true, runValidators: true }
-        );
+        const updatedTax = await db.updateRoadTax(req.params.id, req.body);
 
         if (!updatedTax) {
             return res.status(404).json({ message: 'Road tax entry not found' });
         }
-
-        await dualWriteChildUpsert('roadTaxes', prisma.roadTax, updatedTax, roadTaxToPgData(updatedTax));
 
         res.json(updatedTax);
     } catch (error) {
@@ -606,13 +262,11 @@ app.put('/api/taxes/:id', async (req, res) => {
 // DELETE a road tax entry
 app.delete('/api/taxes/:id', async (req, res) => {
     try {
-        const deletedTax = await RoadTax.findByIdAndDelete(req.params.id);
+        const deletedTax = await db.deleteRoadTax(req.params.id);
 
         if (!deletedTax) {
             return res.status(404).json({ message: 'Road tax entry not found' });
         }
-
-        await dualWriteDelete('roadTaxes', prisma.roadTax, req.params.id);
 
         res.json({ message: 'Road tax entry deleted successfully' });
     } catch (error) {
@@ -624,10 +278,7 @@ app.delete('/api/taxes/:id', async (req, res) => {
 // GET fuel logs for a vehicle
 app.get('/api/vehicles/:id/fuel', async (req, res) => {
     try {
-        const fuelLogs = await FuelLog.find({ 
-            vehicleId: req.params.id 
-        }).sort({ date: -1 });
-        
+        const fuelLogs = await db.findFuelLogsForVehicle(req.params.id);
         res.json(fuelLogs);
     } catch (error) {
         console.error('Error fetching fuel logs:', error);
@@ -638,12 +289,12 @@ app.get('/api/vehicles/:id/fuel', async (req, res) => {
 // GET a specific fuel log entry
 app.get('/api/fuel/:id', async (req, res) => {
     try {
-        const fuelLog = await FuelLog.findById(req.params.id);
-        
+        const fuelLog = await db.findFuelLogById(req.params.id);
+
         if (!fuelLog) {
             return res.status(404).json({ message: 'Fuel log entry not found' });
         }
-        
+
         res.json(fuelLog);
     } catch (error) {
         console.error('Error fetching fuel log entry:', error);
@@ -651,26 +302,14 @@ app.get('/api/fuel/:id', async (req, res) => {
     }
 });
 
-function fuelLogToPgData(doc) {
-    return {
-        receiptNumber: doc.receiptNumber,
-        date: doc.date,
-        driver: doc.driver,
-        cost: doc.cost,
-        amount: doc.amount,
-        notes: doc.notes ?? null,
-    };
-}
-
 // POST a new fuel log entry
 app.post('/api/fuel', async (req, res) => {
     try {
-        const newFuelLog = new FuelLog(req.body);
-        const savedFuelLog = await newFuelLog.save();
-
-        await dualWriteChildUpsert('fuelLogs', prisma.fuelLog, savedFuelLog, fuelLogToPgData(savedFuelLog));
-
-        res.status(201).json(savedFuelLog);
+        const result = await db.createFuelLog(req.body);
+        if (result.error === 'vehicle_not_found') {
+            return res.status(404).json({ message: 'Vehicle not found' });
+        }
+        res.status(201).json(result.entry);
     } catch (error) {
         console.error('Error adding fuel log entry:', error);
         res.status(500).json({ message: 'Failed to add fuel log entry' });
@@ -680,17 +319,11 @@ app.post('/api/fuel', async (req, res) => {
 // PUT (update) a fuel log entry
 app.put('/api/fuel/:id', async (req, res) => {
     try {
-        const updatedFuelLog = await FuelLog.findByIdAndUpdate(
-            req.params.id,
-            req.body,
-            { new: true, runValidators: true }
-        );
+        const updatedFuelLog = await db.updateFuelLog(req.params.id, req.body);
 
         if (!updatedFuelLog) {
             return res.status(404).json({ message: 'Fuel log entry not found' });
         }
-
-        await dualWriteChildUpsert('fuelLogs', prisma.fuelLog, updatedFuelLog, fuelLogToPgData(updatedFuelLog));
 
         res.json(updatedFuelLog);
     } catch (error) {
@@ -702,13 +335,11 @@ app.put('/api/fuel/:id', async (req, res) => {
 // DELETE a fuel log entry
 app.delete('/api/fuel/:id', async (req, res) => {
     try {
-        const deletedFuelLog = await FuelLog.findByIdAndDelete(req.params.id);
+        const deletedFuelLog = await db.deleteFuelLog(req.params.id);
 
         if (!deletedFuelLog) {
             return res.status(404).json({ message: 'Fuel log entry not found' });
         }
-
-        await dualWriteDelete('fuelLogs', prisma.fuelLog, req.params.id);
 
         res.json({ message: 'Fuel log entry deleted successfully' });
     } catch (error) {
@@ -720,10 +351,7 @@ app.delete('/api/fuel/:id', async (req, res) => {
 // GET insurance logs for a vehicle
 app.get('/api/vehicles/:id/insurance', async (req, res) => {
     try {
-        const insuranceLogs = await Insurance.find({ 
-            vehicleId: req.params.id 
-        }).sort({ expiryDate: -1 });
-        
+        const insuranceLogs = await db.findInsurancesForVehicle(req.params.id);
         res.json(insuranceLogs);
     } catch (error) {
         console.error('Error fetching insurance logs:', error);
@@ -734,12 +362,12 @@ app.get('/api/vehicles/:id/insurance', async (req, res) => {
 // GET a specific insurance entry
 app.get('/api/insurance/:id', async (req, res) => {
     try {
-        const insurance = await Insurance.findById(req.params.id);
-        
+        const insurance = await db.findInsuranceById(req.params.id);
+
         if (!insurance) {
             return res.status(404).json({ message: 'Insurance entry not found' });
         }
-        
+
         res.json(insurance);
     } catch (error) {
         console.error('Error fetching insurance entry:', error);
@@ -747,27 +375,13 @@ app.get('/api/insurance/:id', async (req, res) => {
     }
 });
 
-// POST a new insurance entry
-function insuranceToPgData(doc) {
-    return {
-        insuranceId: doc.insuranceId,
-        provider: doc.provider,
-        renewalDate: doc.renewalDate,
-        expiryDate: doc.expiryDate,
-        cost: doc.cost,
-        agent: doc.agent ?? null,
-        notes: doc.notes ?? null,
-    };
-}
-
 app.post('/api/insurance', async (req, res) => {
     try {
-        const newInsurance = new Insurance(req.body);
-        const savedInsurance = await newInsurance.save();
-
-        await dualWriteChildUpsert('insurances', prisma.insurance, savedInsurance, insuranceToPgData(savedInsurance));
-
-        res.status(201).json(savedInsurance);
+        const result = await db.createInsurance(req.body);
+        if (result.error === 'vehicle_not_found') {
+            return res.status(404).json({ message: 'Vehicle not found' });
+        }
+        res.status(201).json(result.entry);
     } catch (error) {
         console.error('Error adding insurance entry:', error);
         res.status(500).json({ message: 'Failed to add insurance entry' });
@@ -777,17 +391,11 @@ app.post('/api/insurance', async (req, res) => {
 // PUT (update) an insurance entry
 app.put('/api/insurance/:id', async (req, res) => {
     try {
-        const updatedInsurance = await Insurance.findByIdAndUpdate(
-            req.params.id,
-            req.body,
-            { new: true, runValidators: true }
-        );
+        const updatedInsurance = await db.updateInsurance(req.params.id, req.body);
 
         if (!updatedInsurance) {
             return res.status(404).json({ message: 'Insurance entry not found' });
         }
-
-        await dualWriteChildUpsert('insurances', prisma.insurance, updatedInsurance, insuranceToPgData(updatedInsurance));
 
         res.json(updatedInsurance);
     } catch (error) {
@@ -799,13 +407,11 @@ app.put('/api/insurance/:id', async (req, res) => {
 // DELETE an insurance entry
 app.delete('/api/insurance/:id', async (req, res) => {
     try {
-        const deletedInsurance = await Insurance.findByIdAndDelete(req.params.id);
+        const deletedInsurance = await db.deleteInsurance(req.params.id);
 
         if (!deletedInsurance) {
             return res.status(404).json({ message: 'Insurance entry not found' });
         }
-
-        await dualWriteDelete('insurances', prisma.insurance, req.params.id);
 
         res.json({ message: 'Insurance entry deleted successfully' });
     } catch (error) {
@@ -817,12 +423,7 @@ app.delete('/api/insurance/:id', async (req, res) => {
 // GET location logs for a vehicle
 app.get('/api/vehicles/:id/locations', async (req, res) => {
     try {
-        console.log(`Fetching locations for vehicle ${req.params.id}`);
-        const locations = await Location.find({ 
-            vehicleId: req.params.id 
-        }).sort({ fromDate: -1 });
-        
-        console.log(`Found ${locations.length} location records`);
+        const locations = await db.findLocationsForVehicle(req.params.id);
         res.json(locations);
     } catch (error) {
         console.error('Error:', error);
@@ -830,16 +431,15 @@ app.get('/api/vehicles/:id/locations', async (req, res) => {
     }
 });
 
-
 // GET a specific location entry
 app.get('/api/locations/:id', async (req, res) => {
     try {
-        const location = await Location.findById(req.params.id);
-        
+        const location = await db.findLocationById(req.params.id);
+
         if (!location) {
             return res.status(404).json({ message: 'Location entry not found' });
         }
-        
+
         res.json(location);
     } catch (error) {
         console.error('Error fetching location entry:', error);
@@ -847,25 +447,14 @@ app.get('/api/locations/:id', async (req, res) => {
     }
 });
 
-function locationToPgData(doc) {
-    return {
-        fromDate: doc.fromDate,
-        toDate: doc.toDate,
-        location: doc.location,
-        agent: doc.agent ?? null,
-        notes: doc.notes ?? null,
-    };
-}
-
 // POST a new location entry
 app.post('/api/locations', async (req, res) => {
     try {
-        const newLocation = new Location(req.body);
-        const savedLocation = await newLocation.save();
-
-        await dualWriteChildUpsert('locations', prisma.location, savedLocation, locationToPgData(savedLocation));
-
-        res.status(201).json(savedLocation);
+        const result = await db.createLocation(req.body);
+        if (result.error === 'vehicle_not_found') {
+            return res.status(404).json({ message: 'Vehicle not found' });
+        }
+        res.status(201).json(result.entry);
     } catch (error) {
         console.error('Error adding location entry:', error);
         res.status(500).json({ message: 'Failed to add location entry' });
@@ -875,17 +464,11 @@ app.post('/api/locations', async (req, res) => {
 // PUT (update) a location entry
 app.put('/api/locations/:id', async (req, res) => {
     try {
-        const updatedLocation = await Location.findByIdAndUpdate(
-            req.params.id,
-            req.body,
-            { new: true, runValidators: true }
-        );
+        const updatedLocation = await db.updateLocation(req.params.id, req.body);
 
         if (!updatedLocation) {
             return res.status(404).json({ message: 'Location entry not found' });
         }
-
-        await dualWriteChildUpsert('locations', prisma.location, updatedLocation, locationToPgData(updatedLocation));
 
         res.json(updatedLocation);
     } catch (error) {
@@ -897,13 +480,11 @@ app.put('/api/locations/:id', async (req, res) => {
 // DELETE a location entry
 app.delete('/api/locations/:id', async (req, res) => {
     try {
-        const deletedLocation = await Location.findByIdAndDelete(req.params.id);
+        const deletedLocation = await db.deleteLocation(req.params.id);
 
         if (!deletedLocation) {
             return res.status(404).json({ message: 'Location entry not found' });
         }
-
-        await dualWriteDelete('locations', prisma.location, req.params.id);
 
         res.json({ message: 'Location entry deleted successfully' });
     } catch (error) {
@@ -915,10 +496,7 @@ app.delete('/api/locations/:id', async (req, res) => {
 app.get('/api/mileage/latest', async (req, res) => {
     try {
         const { vehicleId } = req.query;
-        const latestMileage = await MileageLog.findOne({ 
-            vehicleId 
-        }).sort({ date: -1 });
-        
+        const latestMileage = await db.findLatestMileage(vehicleId);
         res.json(latestMileage);
     } catch (error) {
         console.error('Error fetching latest mileage:', error);
@@ -928,22 +506,9 @@ app.get('/api/mileage/latest', async (req, res) => {
 
 app.get('/api/vehicles/:id/mileage/history', async (req, res) => {
     try {
-        const { vehicleId } = req.params;
+        const { id: vehicleId } = req.params;
         const { startDate, endDate } = req.query;
-        
-        let query = { vehicleId };
-        
-        if (startDate && endDate) {
-            query.date = {
-                $gte: new Date(startDate),
-                $lte: new Date(endDate)
-            };
-        }
-        
-        const mileageLogs = await MileageLog.find(query)
-            .sort({ date: -1 })
-            .populate('vehicleId', 'make model plate');
-        
+        const mileageLogs = await db.findMileageHistory(vehicleId, startDate, endDate);
         res.json(mileageLogs);
     } catch (error) {
         console.error('Error fetching mileage history:', error);
@@ -954,21 +519,11 @@ app.get('/api/vehicles/:id/mileage/history', async (req, res) => {
 // POST a new mileage log entry
 app.post('/api/mileage', async (req, res) => {
     try {
-        const newMileageLog = new MileageLog(req.body);
-        const savedMileageLog = await newMileageLog.save();
-
-        // REMOVED the vehicle update - only log mileage, don't update vehicle
-        // await Vehicle.findByIdAndUpdate(req.body.vehicleId, {
-        //     currentMileage: req.body.mileage
-        // });
-
-        await dualWriteChildUpsert('mileageLogs', prisma.mileageLog, savedMileageLog, {
-            date: savedMileageLog.date,
-            mileage: savedMileageLog.mileage,
-            notes: savedMileageLog.notes ?? null,
-        });
-
-        res.status(201).json(savedMileageLog);
+        const result = await db.createMileageLog(req.body);
+        if (result.error === 'vehicle_not_found') {
+            return res.status(404).json({ message: 'Vehicle not found' });
+        }
+        res.status(201).json(result.entry);
     } catch (error) {
         console.error('Error adding mileage log:', error);
         res.status(500).json({ message: 'Failed to add mileage log' });
@@ -978,10 +533,7 @@ app.post('/api/mileage', async (req, res) => {
 // GET all mileage logs for a vehicle
 app.get('/api/vehicles/:id/mileage', async (req, res) => {
     try {
-        const mileageLogs = await MileageLog.find({ 
-            vehicleId: req.params.id 
-        }).sort({ date: -1 });
-        
+        const mileageLogs = await db.findAllMileageForVehicle(req.params.id);
         res.json(mileageLogs);
     } catch (error) {
         console.error('Error fetching mileage logs:', error);
@@ -992,26 +544,12 @@ app.get('/api/vehicles/:id/mileage', async (req, res) => {
 app.get('/api/mileage/by-date', async (req, res) => {
     try {
         const { vehicleId, date } = req.query;
-        
+
         if (!vehicleId || !date) {
             return res.status(400).json({ message: 'Vehicle ID and date are required' });
         }
-        
-        // Find mileage log for the specific date
-        const startOfDay = new Date(date);
-        startOfDay.setHours(0, 0, 0, 0);
-        
-        const endOfDay = new Date(date);
-        endOfDay.setHours(23, 59, 59, 999);
-        
-        const mileageLog = await MileageLog.findOne({
-            vehicleId: vehicleId,
-            date: {
-                $gte: startOfDay,
-                $lte: endOfDay
-            }
-        });
-        
+
+        const mileageLog = await db.findMileageByDate(vehicleId, date);
         res.json(mileageLog);
     } catch (error) {
         console.error('Error fetching mileage by date:', error);
@@ -1019,14 +557,12 @@ app.get('/api/mileage/by-date', async (req, res) => {
     }
 });
 
-
-
 app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));  // Changed path
-  });
-  
-  // Start the server
-  app.listen(PORT, () => {
+    res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+// Start the server
+app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
     console.log(`Access the app at: http://localhost:${PORT}`);
-  });
+});
