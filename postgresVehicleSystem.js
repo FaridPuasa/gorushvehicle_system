@@ -23,6 +23,13 @@ function toNum(value) {
     return value === null || value === undefined ? value : Number(value);
 }
 
+// Mongoose coerced date-only strings ("YYYY-MM-DD") into Dates automatically;
+// Prisma's DateTime scalar requires full ISO-8601 and rejects them, so every
+// date field coming from a request body must be converted explicitly.
+function toDate(value) {
+    return value === null || value === undefined ? value : new Date(value);
+}
+
 function toApiVehicle(row) {
     return {
         _id: row.mongoId,
@@ -157,10 +164,10 @@ async function createVehicle(data) {
             chasis: data.chasis ?? null,
             status: data.status || 'active',
             fuelType: data.fuelType ?? null,
-            acquisitionDate: data.acquisitionDate ?? null,
+            acquisitionDate: toDate(data.acquisitionDate) ?? null,
             currentMileage: data.currentMileage ?? 0,
-            lastService: data.lastService ?? null,
-            nextService: data.nextService ?? null,
+            lastService: toDate(data.lastService) ?? null,
+            nextService: toDate(data.nextService) ?? null,
         },
     });
     return toApiVehicle(row);
@@ -174,8 +181,8 @@ async function updateVehicle(mongoId, data) {
         data: {
             year: data.year, make: data.make, model: data.model, plate: data.plate,
             engine: data.engine, chasis: data.chasis, status: data.status, fuelType: data.fuelType,
-            acquisitionDate: data.acquisitionDate, currentMileage: data.currentMileage,
-            lastService: data.lastService, nextService: data.nextService,
+            acquisitionDate: toDate(data.acquisitionDate), currentMileage: data.currentMileage,
+            lastService: toDate(data.lastService), nextService: toDate(data.nextService),
         },
     });
     return toApiVehicle(row);
@@ -196,7 +203,10 @@ async function deleteVehicle(mongoId) {
 async function updateVehicleServiceInfo(vehicleMongoId, data) {
     const existing = await findPgVehicleByMongoId(vehicleMongoId);
     if (!existing) return null;
-    return prisma.vehicle.update({ where: { id: existing.id }, data });
+    return prisma.vehicle.update({
+        where: { id: existing.id },
+        data: { ...data, lastService: toDate(data.lastService), nextService: toDate(data.nextService) },
+    });
 }
 
 // --- MaintenanceLog ---
@@ -231,13 +241,13 @@ async function createMaintenanceLog(data) {
         data: {
             mongoId: generateMongoIdShape(),
             vehicleId: vehicle.id,
-            date: data.date,
+            date: toDate(data.date),
             description: data.description,
             odometer: data.odometer,
             nextServiceMileage: data.nextServiceMileage ?? null,
             serviceProvider: data.serviceProvider ?? null,
             cost: data.cost ?? null,
-            nextServiceDue: data.nextServiceDue ?? null,
+            nextServiceDue: toDate(data.nextServiceDue) ?? null,
             notes: data.notes ?? null,
         },
         include: CHILD_INCLUDE,
@@ -251,9 +261,9 @@ async function updateMaintenanceLog(mongoId, data) {
     const row = await prisma.maintenanceLog.update({
         where: { id: existing.id },
         data: {
-            date: data.date, description: data.description, odometer: data.odometer,
+            date: toDate(data.date), description: data.description, odometer: data.odometer,
             nextServiceMileage: data.nextServiceMileage ?? null, serviceProvider: data.serviceProvider ?? null,
-            cost: data.cost ?? null, nextServiceDue: data.nextServiceDue ?? null, notes: data.notes ?? null,
+            cost: data.cost ?? null, nextServiceDue: toDate(data.nextServiceDue) ?? null, notes: data.notes ?? null,
         },
         include: CHILD_INCLUDE,
     });
@@ -289,7 +299,7 @@ async function createRoadTax(data) {
     const row = await prisma.roadTax.create({
         data: {
             mongoId: generateMongoIdShape(), vehicleId: vehicle.id,
-            taxId: data.taxId, renewalDate: data.renewalDate, expiryDate: data.expiryDate,
+            taxId: data.taxId, renewalDate: toDate(data.renewalDate), expiryDate: toDate(data.expiryDate),
             cost: data.cost, agent: data.agent ?? null, notes: data.notes ?? null,
         },
         include: CHILD_INCLUDE,
@@ -302,7 +312,7 @@ async function updateRoadTax(mongoId, data) {
     if (!existing) return null;
     const row = await prisma.roadTax.update({
         where: { id: existing.id },
-        data: { taxId: data.taxId, renewalDate: data.renewalDate, expiryDate: data.expiryDate, cost: data.cost, agent: data.agent ?? null, notes: data.notes ?? null },
+        data: { taxId: data.taxId, renewalDate: toDate(data.renewalDate), expiryDate: toDate(data.expiryDate), cost: data.cost, agent: data.agent ?? null, notes: data.notes ?? null },
         include: CHILD_INCLUDE,
     });
     return toApiRoadTax(row);
@@ -337,7 +347,7 @@ async function createFuelLog(data) {
     const row = await prisma.fuelLog.create({
         data: {
             mongoId: generateMongoIdShape(), vehicleId: vehicle.id,
-            receiptNumber: data.receiptNumber, date: data.date, driver: data.driver,
+            receiptNumber: data.receiptNumber, date: toDate(data.date), driver: data.driver,
             cost: data.cost, amount: data.amount, notes: data.notes ?? null,
         },
         include: CHILD_INCLUDE,
@@ -350,7 +360,7 @@ async function updateFuelLog(mongoId, data) {
     if (!existing) return null;
     const row = await prisma.fuelLog.update({
         where: { id: existing.id },
-        data: { receiptNumber: data.receiptNumber, date: data.date, driver: data.driver, cost: data.cost, amount: data.amount, notes: data.notes ?? null },
+        data: { receiptNumber: data.receiptNumber, date: toDate(data.date), driver: data.driver, cost: data.cost, amount: data.amount, notes: data.notes ?? null },
         include: CHILD_INCLUDE,
     });
     return toApiFuelLog(row);
@@ -385,7 +395,7 @@ async function createInsurance(data) {
     const row = await prisma.insurance.create({
         data: {
             mongoId: generateMongoIdShape(), vehicleId: vehicle.id,
-            insuranceId: data.insuranceId, provider: data.provider, renewalDate: data.renewalDate, expiryDate: data.expiryDate,
+            insuranceId: data.insuranceId, provider: data.provider, renewalDate: toDate(data.renewalDate), expiryDate: toDate(data.expiryDate),
             cost: data.cost, agent: data.agent ?? null, notes: data.notes ?? null,
         },
         include: CHILD_INCLUDE,
@@ -398,7 +408,7 @@ async function updateInsurance(mongoId, data) {
     if (!existing) return null;
     const row = await prisma.insurance.update({
         where: { id: existing.id },
-        data: { insuranceId: data.insuranceId, provider: data.provider, renewalDate: data.renewalDate, expiryDate: data.expiryDate, cost: data.cost, agent: data.agent ?? null, notes: data.notes ?? null },
+        data: { insuranceId: data.insuranceId, provider: data.provider, renewalDate: toDate(data.renewalDate), expiryDate: toDate(data.expiryDate), cost: data.cost, agent: data.agent ?? null, notes: data.notes ?? null },
         include: CHILD_INCLUDE,
     });
     return toApiInsurance(row);
@@ -433,7 +443,7 @@ async function createLocation(data) {
     const row = await prisma.location.create({
         data: {
             mongoId: generateMongoIdShape(), vehicleId: vehicle.id,
-            fromDate: data.fromDate, toDate: data.toDate, location: data.location,
+            fromDate: toDate(data.fromDate), toDate: toDate(data.toDate), location: data.location,
             agent: data.agent ?? null, notes: data.notes ?? null,
         },
         include: CHILD_INCLUDE,
@@ -446,7 +456,7 @@ async function updateLocation(mongoId, data) {
     if (!existing) return null;
     const row = await prisma.location.update({
         where: { id: existing.id },
-        data: { fromDate: data.fromDate, toDate: data.toDate, location: data.location, agent: data.agent ?? null, notes: data.notes ?? null },
+        data: { fromDate: toDate(data.fromDate), toDate: toDate(data.toDate), location: data.location, agent: data.agent ?? null, notes: data.notes ?? null },
         include: CHILD_INCLUDE,
     });
     return toApiLocation(row);
@@ -510,7 +520,7 @@ async function createMileageLog(data) {
     const row = await prisma.mileageLog.create({
         data: {
             mongoId: generateMongoIdShape(), vehicleId: vehicle.id,
-            date: data.date, mileage: data.mileage, notes: data.notes ?? null,
+            date: toDate(data.date), mileage: data.mileage, notes: data.notes ?? null,
         },
         include: CHILD_INCLUDE,
     });
