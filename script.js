@@ -1447,17 +1447,18 @@ async function deleteRoadTaxEntry(entryId) {
     // Display vehicle information
     async function displayVehicleInfo(vehicleId) {
         try {
-            const response = await fetch(`${API.vehicles}/${vehicleId}`);
+            const [response, taxResponse, insuranceResponse] = await Promise.all([
+                fetch(`${API.vehicles}/${vehicleId}`),
+                fetch(`${API.vehicles}/${vehicleId}/taxes`),
+                fetch(`${API.vehicles}/${vehicleId}/insurance`),
+            ]);
             if (!response.ok) throw new Error('Failed to fetch vehicle information');
-            
+
             const vehicle = await response.json();
 
-            const taxResponse = await fetch(`${API.vehicles}/${vehicleId}/taxes`);
             const taxes = taxResponse.ok ? await taxResponse.json() : [];
             const latestTax = taxes.sort((a, b) => new Date(b.expiryDate) - new Date(a.expiryDate))[0];
 
-            // Fetch latest insurance
-            const insuranceResponse = await fetch(`${API.vehicles}/${vehicleId}/insurance`);
             const insurances = insuranceResponse.ok ? await insuranceResponse.json() : [];
             const latestInsurance = insurances.sort((a, b) => new Date(b.expiryDate) - new Date(a.expiryDate))[0];
 
