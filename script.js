@@ -355,36 +355,25 @@ async function logMileageEntry() {
     }
 }
 
-        document.getElementById('modal-backdrop').addEventListener('click', closeModal);
-        document.querySelectorAll('.modal-close').forEach(btn => {
-            btn.addEventListener('click', closeModal);
-        });
-
-        // Sample interactions
-        document.getElementById('add-maintenance').addEventListener('click', () => {
-            openModal('sample-modal');
-        });
-
 
 
 async function fetchExpiryData() {
-    const results = await Promise.all(dashboardData.vehicles.map(async (vehicle) => {
-        try {
-            const [insuranceResponse, taxResponse] = await Promise.all([
-                fetch(`${API.vehicles}/${vehicle._id}/insurance`),
-                fetch(`${API.vehicles}/${vehicle._id}/taxes`),
-            ]);
-            const insuranceData = insuranceResponse.ok ? await insuranceResponse.json() : [];
-            const taxData = taxResponse.ok ? await taxResponse.json() : [];
-            return { insuranceData, taxData };
-        } catch (error) {
-            console.error(`Error fetching data for vehicle ${vehicle._id}:`, error);
-            return { insuranceData: [], taxData: [] };
-        }
-    }));
+    try {
+        const response = await fetch('/api/dashboard/expiry-data');
+        if (!response.ok) throw new Error('Failed to fetch expiry data');
+        const { insurances, taxes } = await response.json();
 
-    dashboardData.insuranceData = results.map(r => r.insuranceData);
-    dashboardData.taxData = results.map(r => r.taxData);
+        dashboardData.insuranceData = dashboardData.vehicles.map(vehicle =>
+            insurances.filter(entry => entry.vehicleId === vehicle._id)
+        );
+        dashboardData.taxData = dashboardData.vehicles.map(vehicle =>
+            taxes.filter(entry => entry.vehicleId === vehicle._id)
+        );
+    } catch (error) {
+        console.error('Error fetching expiry data:', error);
+        dashboardData.insuranceData = dashboardData.vehicles.map(() => []);
+        dashboardData.taxData = dashboardData.vehicles.map(() => []);
+    }
 }
 
 function renderDashboardTable() {
@@ -479,14 +468,14 @@ function showError(message) {
 async function initApp() {
     try {
         setupEventListeners();
-        await populateVehicleDropdown();
-        await refreshDashboard(); // Add this line
-        
-        addDeleteVehicleButton();
+        // Independent of each other (dropdown/detail tabs vs. summary table),
+        // so they don't need to wait on one another.
+        await Promise.all([
+            populateVehicleDropdown(),
+            refreshDashboard(),
+        ]);
 
-        if (currentVehicleId) {
-            await displayLocationLogs(currentVehicleId);
-        }
+        addDeleteVehicleButton();
     } catch (error) {
         console.error('Error initializing app:', error);
         alert('There was an error initializing the application. Please try again later.');

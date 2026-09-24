@@ -28,6 +28,21 @@ app.get('/api/vehicles', async (req, res) => {
     }
 });
 
+// Bulk fetch for the dashboard, which used to fire one insurance + one tax
+// request per vehicle. Two queries total instead of 2N.
+app.get('/api/dashboard/expiry-data', async (req, res) => {
+    try {
+        const [insurances, taxes] = await Promise.all([
+            db.findAllInsurances(),
+            db.findAllRoadTaxes(),
+        ]);
+        res.json({ insurances, taxes });
+    } catch (error) {
+        console.error('Error fetching dashboard expiry data:', error);
+        res.status(500).json({ message: 'Failed to fetch expiry data' });
+    }
+});
+
 app.get('/api/vehicles/:id', async (req, res) => {
     try {
         const vehicle = await db.findVehicleById(req.params.id);

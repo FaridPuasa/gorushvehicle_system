@@ -288,6 +288,13 @@ async function findRoadTaxesForVehicle(vehicleMongoId) {
     return rows.map(toApiRoadTax);
 }
 
+// Single query across every vehicle - used by the dashboard so it doesn't
+// have to make one request per vehicle just to find each one's latest entry.
+async function findAllRoadTaxes() {
+    const rows = await prisma.roadTax.findMany({ orderBy: { expiryDate: 'desc' }, include: CHILD_INCLUDE });
+    return rows.map(toApiRoadTax);
+}
+
 async function findRoadTaxById(mongoId) {
     const row = await prisma.roadTax.findUnique({ where: { mongoId: String(mongoId) }, include: CHILD_INCLUDE });
     return row ? toApiRoadTax(row) : null;
@@ -381,6 +388,13 @@ async function findInsurancesForVehicle(vehicleMongoId) {
         orderBy: { expiryDate: 'desc' },
         include: CHILD_INCLUDE,
     });
+    return rows.map(toApiInsurance);
+}
+
+// Single query across every vehicle - used by the dashboard so it doesn't
+// have to make one request per vehicle just to find each one's latest entry.
+async function findAllInsurances() {
+    const rows = await prisma.insurance.findMany({ orderBy: { expiryDate: 'desc' }, include: CHILD_INCLUDE });
     return rows.map(toApiInsurance);
 }
 
@@ -530,9 +544,9 @@ async function createMileageLog(data) {
 module.exports = {
     findAllVehicles, findVehicleById, createVehicle, updateVehicle, deleteVehicle, updateVehicleServiceInfo,
     findMaintenanceLogsForVehicle, findMaintenanceLogById, findMostRecentMaintenanceLog, createMaintenanceLog, updateMaintenanceLog, deleteMaintenanceLog,
-    findRoadTaxesForVehicle, findRoadTaxById, createRoadTax, updateRoadTax, deleteRoadTax,
+    findRoadTaxesForVehicle, findAllRoadTaxes, findRoadTaxById, createRoadTax, updateRoadTax, deleteRoadTax,
     findFuelLogsForVehicle, findFuelLogById, createFuelLog, updateFuelLog, deleteFuelLog,
-    findInsurancesForVehicle, findInsuranceById, createInsurance, updateInsurance, deleteInsurance,
+    findInsurancesForVehicle, findAllInsurances, findInsuranceById, createInsurance, updateInsurance, deleteInsurance,
     findLocationsForVehicle, findLocationById, createLocation, updateLocation, deleteLocation,
     findLatestMileage, findAllMileageForVehicle, findMileageHistory, findMileageByDate, createMileageLog,
 };
