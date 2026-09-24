@@ -368,35 +368,23 @@ async function logMileageEntry() {
 
 
 async function fetchExpiryData() {
-    dashboardData.insuranceData = [];
-    dashboardData.taxData = [];
-    
-    for (const vehicle of dashboardData.vehicles) {
+    const results = await Promise.all(dashboardData.vehicles.map(async (vehicle) => {
         try {
-            // Fetch insurance data
-            const insuranceResponse = await fetch(`${API.vehicles}/${vehicle._id}/insurance`);
-            if (insuranceResponse.ok) {
-                const insuranceData = await insuranceResponse.json();
-                dashboardData.insuranceData.push(insuranceData);
-            } else {
-                dashboardData.insuranceData.push([]);
-            }
-            
-            // Fetch tax data
-            const taxResponse = await fetch(`${API.vehicles}/${vehicle._id}/taxes`);
-            if (taxResponse.ok) {
-                const taxData = await taxResponse.json();
-                dashboardData.taxData.push(taxData);
-            } else {
-                dashboardData.taxData.push([]);
-            }
-            
+            const [insuranceResponse, taxResponse] = await Promise.all([
+                fetch(`${API.vehicles}/${vehicle._id}/insurance`),
+                fetch(`${API.vehicles}/${vehicle._id}/taxes`),
+            ]);
+            const insuranceData = insuranceResponse.ok ? await insuranceResponse.json() : [];
+            const taxData = taxResponse.ok ? await taxResponse.json() : [];
+            return { insuranceData, taxData };
         } catch (error) {
             console.error(`Error fetching data for vehicle ${vehicle._id}:`, error);
-            dashboardData.insuranceData.push([]);
-            dashboardData.taxData.push([]);
+            return { insuranceData: [], taxData: [] };
         }
-    }
+    }));
+
+    dashboardData.insuranceData = results.map(r => r.insuranceData);
+    dashboardData.taxData = results.map(r => r.taxData);
 }
 
 function renderDashboardTable() {
@@ -566,12 +554,14 @@ async function initApp() {
         if (vehicles.length > 0) {
             vehicleSelect.value = vehicles[0]._id;
             currentVehicleId = vehicles[0]._id;
-            await displayVehicleInfo(vehicles[0]._id);
-            await displayMaintenanceLogs(vehicles[0]._id);
-            await displayFuelLogs(vehicles[0]._id);
-            await displayRoadTaxLogs(vehicles[0]._id);
-            await displayInsuranceLogs(vehicles[0]._id);
-            await displayLocationLogs(vehicles[0]._id);
+            await Promise.all([
+                displayVehicleInfo(vehicles[0]._id),
+                displayMaintenanceLogs(vehicles[0]._id),
+                displayFuelLogs(vehicles[0]._id),
+                displayRoadTaxLogs(vehicles[0]._id),
+                displayInsuranceLogs(vehicles[0]._id),
+                displayLocationLogs(vehicles[0]._id),
+            ]);
         }
         
         console.log("Vehicle dropdown populated with", vehicleSelect.options.length, "options");
@@ -909,12 +899,14 @@ async function handleVehicleSelect() {
             mileageVehicleSelect.value = selectedValue;
         }
         
-        await displayVehicleInfo(selectedValue);
-        await displayMaintenanceLogs(selectedValue);
-        await displayRoadTaxLogs(selectedValue);
-        await displayFuelLogs(selectedValue);
-        await displayInsuranceLogs(selectedValue);
-        await displayLocationLogs(selectedValue);
+        await Promise.all([
+            displayVehicleInfo(selectedValue),
+            displayMaintenanceLogs(selectedValue),
+            displayRoadTaxLogs(selectedValue),
+            displayFuelLogs(selectedValue),
+            displayInsuranceLogs(selectedValue),
+            displayLocationLogs(selectedValue),
+        ]);
         await initMileageTracker();
     } else {
         // Clear vehicle info if no selection
