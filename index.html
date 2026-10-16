@@ -799,6 +799,84 @@
     </div>
     </div>
 
+    <div class="section-divider" style="width: 93%; align-items: center; text-align: center; margin: 20px auto;"></div>
+
+    <!-- Export Reports Section - Collapsible -->
+    <div class="card export-reports-card" style="width: 93%; align-items: center; text-align: center; margin: 20px auto;">
+        <div class="card-header collapsible-header" id="export-reports-header">
+            <h3 class="card-title"><i class="fas fa-file-pdf"></i> Export Reports</h3>
+            <button class="collapse-toggle">
+                <i class="fas fa-chevron-down"></i>
+            </button>
+        </div>
+        <div class="card-body collapsible-content" id="export-reports-content" style="display: none;">
+            <div class="form-group">
+                <label for="report-log-type">Log Type:</label>
+                <select id="report-log-type" class="form-input">
+                    <option value="maintenance">Maintenance Log</option>
+                    <option value="roadtax">Road Tax Log</option>
+                    <option value="fuel">Fuel Log</option>
+                    <option value="insurance">Insurance Log</option>
+                    <option value="location">Location Log</option>
+                    <option value="mileage">Mileage Log</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Vehicles:</label>
+                <div class="report-vehicle-controls">
+                    <button type="button" id="report-select-all-vehicles" class="btn btn-secondary btn-small">Select All</button>
+                    <button type="button" id="report-clear-vehicles" class="btn btn-secondary btn-small">Clear</button>
+                </div>
+                <div id="report-vehicle-list" class="report-vehicle-list">
+                    <span class="no-data">Loading vehicles...</span>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="report-period-type">Period:</label>
+                <select id="report-period-type" class="form-input">
+                    <option value="daily">Daily (single date)</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="monthly">Monthly</option>
+                    <option value="custom">Custom Range</option>
+                </select>
+            </div>
+
+            <div class="form-group" id="report-period-daily">
+                <label for="report-date-daily">Date:</label>
+                <input type="date" id="report-date-daily" class="form-input">
+            </div>
+
+            <div class="form-group" id="report-period-weekly" style="display:none;">
+                <label for="report-date-weekly">Week:</label>
+                <input type="week" id="report-date-weekly" class="form-input">
+            </div>
+
+            <div class="form-group" id="report-period-monthly" style="display:none;">
+                <label for="report-date-monthly">Month:</label>
+                <input type="month" id="report-date-monthly" class="form-input">
+            </div>
+
+            <div class="form-row" id="report-period-custom" style="display:none;">
+                <div class="form-group">
+                    <label for="report-date-start">From:</label>
+                    <input type="date" id="report-date-start" class="form-input">
+                </div>
+                <div class="form-group">
+                    <label for="report-date-end">To:</label>
+                    <input type="date" id="report-date-end" class="form-input">
+                </div>
+            </div>
+
+            <div class="button-container">
+                <button id="generate-report-btn" class="btn btn-primary"><i class="fas fa-file-pdf"></i> Export to PDF</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
     <script src="script.js"></script>
 </body>
 

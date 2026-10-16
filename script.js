@@ -110,7 +110,12 @@ const mileageVehicleSelect = document.getElementById('mileage-vehicle-select');
     
     // Current selected vehicle
     let currentVehicleId = null;
-    
+
+    // Vehicles known to the Export Reports panel, kept separate from
+    // dashboardData.vehicles since this needs to stay fresh after any
+    // vehicle add/edit/delete, not just on initial load.
+    let reportVehicles = [];
+
     // Initialize the application
     initApp();
 
@@ -468,6 +473,7 @@ function showError(message) {
 async function initApp() {
     try {
         setupEventListeners();
+        setupReportFeature();
         // Independent of each other (dropdown/detail tabs vs. summary table),
         // so they don't need to wait on one another.
         await Promise.all([
@@ -476,6 +482,7 @@ async function initApp() {
         ]);
 
         addDeleteVehicleButton();
+        populateReportVehicleList();
     } catch (error) {
         console.error('Error initializing app:', error);
         alert('There was an error initializing the application. Please try again later.');
@@ -2142,6 +2149,297 @@ async function deleteInsuranceEntry(entryId) {
         }
     }
 }
+// ===== Export Reports =====
+
+const REPORT_LOG_CONFIG = {
+    maintenance: {
+        label: 'Maintenance Log',
+        columns: ['Vehicle', 'Date', 'Description', 'Odometer', 'Service Provider', 'Cost', 'Next Service'],
+        row: (entry, vehicleLabel) => [
+            vehicleLabel,
+            formatDate(entry.date),
+            entry.description || '',
+            entry.odometer != null ? entry.odometer.toLocaleString() : '',
+            entry.serviceProvider || '',
+            entry.cost != null ? `$${Number(entry.cost).toFixed(2)}` : '',
+            entry.nextServiceDue ? formatDate(entry.nextServiceDue) : '',
+        ],
+    },
+    roadtax: {
+        label: 'Road Tax Log',
+        columns: ['Vehicle', 'Tax ID', 'Renewal Date', 'Expiry Date', 'Cost', 'Agent'],
+        row: (entry, vehicleLabel) => [
+            vehicleLabel,
+            entry.taxId || '',
+            formatDate(entry.renewalDate),
+            formatDate(entry.expiryDate),
+            entry.cost != null ? `$${Number(entry.cost).toFixed(2)}` : '',
+            entry.agent || '',
+        ],
+    },
+    fuel: {
+        label: 'Fuel Log',
+        columns: ['Vehicle', 'Receipt #', 'Date', 'Driver', 'Cost', 'Amount'],
+        row: (entry, vehicleLabel) => [
+            vehicleLabel,
+            entry.receiptNumber || '',
+            formatDate(entry.date),
+            entry.driver || '',
+            entry.cost != null ? `$${Number(entry.cost).toFixed(2)}` : '',
+            entry.amount || '',
+        ],
+    },
+    insurance: {
+        label: 'Insurance Log',
+        columns: ['Vehicle', 'Insurance ID', 'Provider', 'Renewal Date', 'Expiry Date', 'Cost', 'Agent'],
+        row: (entry, vehicleLabel) => [
+            vehicleLabel,
+            entry.insuranceId || '',
+            entry.provider || '',
+            formatDate(entry.renewalDate),
+            formatDate(entry.expiryDate),
+            entry.cost != null ? `$${Number(entry.cost).toFixed(2)}` : '',
+            entry.agent || '',
+        ],
+    },
+    location: {
+        label: 'Location Log',
+        columns: ['Vehicle', 'From Date', 'To Date', 'Location', 'Agent'],
+        row: (entry, vehicleLabel) => [
+            vehicleLabel,
+            formatDate(entry.fromDate),
+            formatDate(entry.toDate),
+            entry.location || '',
+            entry.agent || '',
+        ],
+    },
+    mileage: {
+        label: 'Mileage Log',
+        columns: ['Vehicle', 'Date', 'Mileage', 'Notes'],
+        row: (entry, vehicleLabel) => [
+            vehicleLabel,
+            formatDate(entry.date),
+            entry.mileage != null ? entry.mileage.toLocaleString() : '',
+            entry.notes || '',
+        ],
+    },
+};
+
+async function populateReportVehicleList() {
+    const container = document.getElementById('report-vehicle-list');
+    if (!container) return;
+
+    try {
+        const response = await fetch(API.vehicles);
+        reportVehicles = response.ok ? await response.json() : [];
+    } catch (error) {
+        console.error('Error loading vehicles for report panel:', error);
+        reportVehicles = [];
+    }
+
+    if (reportVehicles.length === 0) {
+        container.innerHTML = '<span class="no-data">No vehicles found</span>';
+        return;
+    }
+
+    container.innerHTML = reportVehicles.map(vehicle => `
+        <div class="report-vehicle-item">
+            <input type="checkbox" id="report-vehicle-${vehicle._id}" value="${vehicle._id}" class="report-vehicle-checkbox" checked>
+            <label for="report-vehicle-${vehicle._id}">${vehicle.year} ${vehicle.make} ${vehicle.model} (${vehicle.plate})</label>
+        </div>
+    `).join('');
+}
+
+function setupReportFeature() {
+    const header = document.getElementById('export-reports-header');
+    const content = document.getElementById('export-reports-content');
+    if (header && content) {
+        header.addEventListener('click', function() {
+            const toggle = this.querySelector('.collapse-toggle');
+            const icon = toggle.querySelector('i');
+            content.classList.toggle('expanded');
+            icon.classList.toggle('fa-chevron-down');
+            icon.classList.toggle('fa-chevron-up');
+            toggle.classList.toggle('expanded');
+        });
+    }
+
+    const selectAllBtn = document.getElementById('report-select-all-vehicles');
+    if (selectAllBtn) {
+        selectAllBtn.addEventListener('click', () => {
+            document.querySelectorAll('.report-vehicle-checkbox').forEach(cb => { cb.checked = true; });
+        });
+    }
+
+    const clearBtn = document.getElementById('report-clear-vehicles');
+    if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+            document.querySelectorAll('.report-vehicle-checkbox').forEach(cb => { cb.checked = false; });
+        });
+    }
+
+    const periodType = document.getElementById('report-period-type');
+    if (periodType) {
+        periodType.addEventListener('change', () => {
+            const value = periodType.value;
+            document.getElementById('report-period-daily').style.display = value === 'daily' ? 'block' : 'none';
+            document.getElementById('report-period-weekly').style.display = value === 'weekly' ? 'block' : 'none';
+            document.getElementById('report-period-monthly').style.display = value === 'monthly' ? 'block' : 'none';
+            document.getElementById('report-period-custom').style.display = value === 'custom' ? 'flex' : 'none';
+        });
+    }
+
+    const generateBtn = document.getElementById('generate-report-btn');
+    if (generateBtn) {
+        generateBtn.addEventListener('click', generateReportPDF);
+    }
+
+    // Default the daily picker to today
+    const dailyInput = document.getElementById('report-date-daily');
+    if (dailyInput) {
+        dailyInput.value = new Date().toISOString().split('T')[0];
+    }
+}
+
+// Converts an ISO week string ("2026-W05") into its Monday/Sunday date range
+function getWeekRange(isoWeekValue) {
+    const [yearStr, weekStr] = isoWeekValue.split('-W');
+    const year = Number(yearStr);
+    const week = Number(weekStr);
+
+    // ISO week 1 is the week containing the first Thursday of the year
+    const jan4 = new Date(Date.UTC(year, 0, 4));
+    const jan4Day = jan4.getUTCDay() || 7;
+    const week1Monday = new Date(jan4);
+    week1Monday.setUTCDate(jan4.getUTCDate() - jan4Day + 1);
+
+    const start = new Date(week1Monday);
+    start.setUTCDate(week1Monday.getUTCDate() + (week - 1) * 7);
+    const end = new Date(start);
+    end.setUTCDate(start.getUTCDate() + 6);
+
+    return {
+        startDate: start.toISOString().split('T')[0],
+        endDate: end.toISOString().split('T')[0],
+    };
+}
+
+function getMonthRange(isoMonthValue) {
+    const [yearStr, monthStr] = isoMonthValue.split('-');
+    const year = Number(yearStr);
+    const month = Number(monthStr); // 1-12
+
+    const start = new Date(Date.UTC(year, month - 1, 1));
+    const end = new Date(Date.UTC(year, month, 0)); // day 0 of next month = last day of this month
+
+    return {
+        startDate: start.toISOString().split('T')[0],
+        endDate: end.toISOString().split('T')[0],
+    };
+}
+
+function computeReportDateRange() {
+    const periodType = document.getElementById('report-period-type').value;
+
+    if (periodType === 'daily') {
+        const date = document.getElementById('report-date-daily').value;
+        if (!date) return null;
+        return { startDate: date, endDate: date };
+    }
+
+    if (periodType === 'weekly') {
+        const week = document.getElementById('report-date-weekly').value;
+        if (!week) return null;
+        return getWeekRange(week);
+    }
+
+    if (periodType === 'monthly') {
+        const month = document.getElementById('report-date-monthly').value;
+        if (!month) return null;
+        return getMonthRange(month);
+    }
+
+    // custom
+    const startDate = document.getElementById('report-date-start').value;
+    const endDate = document.getElementById('report-date-end').value;
+    if (!startDate || !endDate) return null;
+    return { startDate, endDate };
+}
+
+async function generateReportPDF() {
+    const logType = document.getElementById('report-log-type').value;
+    const config = REPORT_LOG_CONFIG[logType];
+
+    const selectedVehicleIds = Array.from(document.querySelectorAll('.report-vehicle-checkbox:checked')).map(cb => cb.value);
+    if (selectedVehicleIds.length === 0) {
+        alert('Please select at least one vehicle.');
+        return;
+    }
+
+    const dateRange = computeReportDateRange();
+    if (!dateRange) {
+        alert('Please select a valid date / period.');
+        return;
+    }
+
+    const generateBtn = document.getElementById('generate-report-btn');
+    const originalBtnText = generateBtn.innerHTML;
+    generateBtn.disabled = true;
+    generateBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating...';
+
+    try {
+        const params = new URLSearchParams({
+            vehicleIds: selectedVehicleIds.join(','),
+            startDate: dateRange.startDate,
+            endDate: dateRange.endDate,
+        });
+        const response = await fetch(`/api/reports/${logType}?${params.toString()}`);
+        if (!response.ok) throw new Error('Failed to fetch report data');
+        const entries = await response.json();
+
+        const vehicleLabelById = {};
+        reportVehicles.forEach(vehicle => {
+            vehicleLabelById[vehicle._id] = `${vehicle.plate} (${vehicle.make} ${vehicle.model})`;
+        });
+
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF();
+
+        doc.setFontSize(16);
+        doc.text(`Go Rush Fleet - ${config.label}`, 14, 18);
+
+        doc.setFontSize(10);
+        doc.text(`Period: ${dateRange.startDate} to ${dateRange.endDate}`, 14, 26);
+        const vehicleNames = selectedVehicleIds.map(id => vehicleLabelById[id] || id).join(', ');
+        const vehicleLine = doc.splitTextToSize(`Vehicles: ${vehicleNames}`, 180);
+        doc.text(vehicleLine, 14, 32);
+
+        const tableStartY = 32 + vehicleLine.length * 5 + 4;
+
+        if (entries.length === 0) {
+            doc.setFontSize(11);
+            doc.text('No records found for this selection.', 14, tableStartY);
+        } else {
+            doc.autoTable({
+                head: [config.columns],
+                body: entries.map(entry => config.row(entry, vehicleLabelById[entry.vehicleId] || entry.vehicleId)),
+                startY: tableStartY,
+                styles: { fontSize: 9 },
+                headStyles: { fillColor: [44, 62, 80] },
+            });
+        }
+
+        doc.save(`${logType}-report-${dateRange.startDate}-to-${dateRange.endDate}.pdf`);
+    } catch (error) {
+        console.error('Error generating report:', error);
+        alert('Failed to generate report. Please try again.');
+    } finally {
+        generateBtn.disabled = false;
+        generateBtn.innerHTML = originalBtnText;
+    }
+}
+
+
 });
 
 async function initMileageTracker() {

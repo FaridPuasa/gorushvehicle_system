@@ -572,6 +572,33 @@ app.get('/api/mileage/by-date', async (req, res) => {
     }
 });
 
+// GET log entries of a given type across one or more vehicles within a date
+// range, for the Export Reports panel (PDF export is built client-side from
+// this JSON).
+app.get('/api/reports/:logType', async (req, res) => {
+    try {
+        const { logType } = req.params;
+        const { vehicleIds, startDate, endDate } = req.query;
+
+        if (!vehicleIds || !startDate || !endDate) {
+            return res.status(400).json({ message: 'vehicleIds, startDate, and endDate are required' });
+        }
+
+        const vehicleMongoIds = vehicleIds.split(',').filter(Boolean);
+        const rangeEnd = new Date(endDate);
+        rangeEnd.setHours(23, 59, 59, 999);
+
+        const rows = await db.findLogsForReport(logType, vehicleMongoIds, new Date(startDate), rangeEnd);
+        if (rows === null) {
+            return res.status(400).json({ message: 'Invalid log type' });
+        }
+        res.json(rows);
+    } catch (error) {
+        console.error('Error generating report:', error);
+        res.status(500).json({ message: 'Failed to generate report' });
+    }
+});
+
 app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });

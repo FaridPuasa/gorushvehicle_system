@@ -541,6 +541,33 @@ async function createMileageLog(data) {
     return { entry: toApiMileageLog(row) };
 }
 
+// --- Reports (export feature) ---
+
+// One query across any number of vehicles, filtered to a date range, for
+// whichever log type the user picked on the Export Reports panel.
+const REPORT_CONFIG = {
+    maintenance: { model: 'maintenanceLog', dateField: 'date', toApi: toApiMaintenanceLog },
+    roadtax: { model: 'roadTax', dateField: 'renewalDate', toApi: toApiRoadTax },
+    fuel: { model: 'fuelLog', dateField: 'date', toApi: toApiFuelLog },
+    insurance: { model: 'insurance', dateField: 'renewalDate', toApi: toApiInsurance },
+    location: { model: 'location', dateField: 'fromDate', toApi: toApiLocation },
+    mileage: { model: 'mileageLog', dateField: 'date', toApi: toApiMileageLog },
+};
+
+async function findLogsForReport(logType, vehicleMongoIds, startDate, endDate) {
+    const config = REPORT_CONFIG[logType];
+    if (!config) return null;
+    const rows = await prisma[config.model].findMany({
+        where: {
+            vehicle: { mongoId: { in: vehicleMongoIds.map(String) } },
+            [config.dateField]: { gte: toDate(startDate), lte: toDate(endDate) },
+        },
+        orderBy: { [config.dateField]: 'asc' },
+        include: CHILD_INCLUDE,
+    });
+    return rows.map(config.toApi);
+}
+
 module.exports = {
     findAllVehicles, findVehicleById, createVehicle, updateVehicle, deleteVehicle, updateVehicleServiceInfo,
     findMaintenanceLogsForVehicle, findMaintenanceLogById, findMostRecentMaintenanceLog, createMaintenanceLog, updateMaintenanceLog, deleteMaintenanceLog,
@@ -549,4 +576,5 @@ module.exports = {
     findInsurancesForVehicle, findAllInsurances, findInsuranceById, createInsurance, updateInsurance, deleteInsurance,
     findLocationsForVehicle, findLocationById, createLocation, updateLocation, deleteLocation,
     findLatestMileage, findAllMileageForVehicle, findMileageHistory, findMileageByDate, createMileageLog,
+    findLogsForReport,
 };

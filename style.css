@@ -1073,3 +1073,75 @@ tbody tr:hover {
   visibility: visible;
   transition: opacity 0.3s ease 0.2s, visibility 0.3s ease 0.2s;
 }
+
+/* Export Reports Card Styles */
+.export-reports-card .card-header {
+  background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+  color: white;
+}
+
+.export-reports-card .collapsible-content {
+  display: block !important;
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.4s ease-out, padding 0.4s ease-out;
+  padding: 0 25px;
+}
+
+.export-reports-card .collapsible-content.expanded {
+  max-height: 2000px;
+  padding: 25px;
+  transition: max-height 0.4s ease-in, padding 0.4s ease-in;
+}
+
+.export-reports-card .collapsible-content>* {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.3s ease 0.1s, visibility 0.3s ease 0.1s;
+}
+
+.export-reports-card .collapsible-content.expanded>* {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.3s ease 0.2s, visibility 0.3s ease 0.2s;
+}
+
+.export-reports-card .form-group {
+  text-align: left;
+  max-width: 500px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.report-vehicle-controls {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.btn-small {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.report-vehicle-list {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 10px;
+  background: var(--white);
+}
+
+.report-vehicle-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.report-vehicle-item label {
+  margin: 0;
+  font-weight: normal;
+  cursor: pointer;
+}
