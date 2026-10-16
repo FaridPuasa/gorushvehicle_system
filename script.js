@@ -2154,9 +2154,8 @@ async function deleteInsuranceEntry(entryId) {
 const REPORT_LOG_CONFIG = {
     maintenance: {
         label: 'Maintenance Log',
-        columns: ['Vehicle', 'Date', 'Description', 'Odometer', 'Service Provider', 'Cost', 'Next Service'],
-        row: (entry, vehicleLabel) => [
-            vehicleLabel,
+        columns: ['Date', 'Description', 'Odometer', 'Service Provider', 'Cost', 'Next Service'],
+        row: (entry) => [
             formatDate(entry.date),
             entry.description || '',
             entry.odometer != null ? entry.odometer.toLocaleString() : '',
@@ -2167,9 +2166,8 @@ const REPORT_LOG_CONFIG = {
     },
     roadtax: {
         label: 'Road Tax Log',
-        columns: ['Vehicle', 'Tax ID', 'Renewal Date', 'Expiry Date', 'Cost', 'Agent'],
-        row: (entry, vehicleLabel) => [
-            vehicleLabel,
+        columns: ['Tax ID', 'Renewal Date', 'Expiry Date', 'Cost', 'Agent'],
+        row: (entry) => [
             entry.taxId || '',
             formatDate(entry.renewalDate),
             formatDate(entry.expiryDate),
@@ -2179,9 +2177,8 @@ const REPORT_LOG_CONFIG = {
     },
     fuel: {
         label: 'Fuel Log',
-        columns: ['Vehicle', 'Receipt #', 'Date', 'Driver', 'Cost', 'Amount'],
-        row: (entry, vehicleLabel) => [
-            vehicleLabel,
+        columns: ['Receipt #', 'Date', 'Driver', 'Cost', 'Amount'],
+        row: (entry) => [
             entry.receiptNumber || '',
             formatDate(entry.date),
             entry.driver || '',
@@ -2191,9 +2188,8 @@ const REPORT_LOG_CONFIG = {
     },
     insurance: {
         label: 'Insurance Log',
-        columns: ['Vehicle', 'Insurance ID', 'Provider', 'Renewal Date', 'Expiry Date', 'Cost', 'Agent'],
-        row: (entry, vehicleLabel) => [
-            vehicleLabel,
+        columns: ['Insurance ID', 'Provider', 'Renewal Date', 'Expiry Date', 'Cost', 'Agent'],
+        row: (entry) => [
             entry.insuranceId || '',
             entry.provider || '',
             formatDate(entry.renewalDate),
@@ -2204,9 +2200,8 @@ const REPORT_LOG_CONFIG = {
     },
     location: {
         label: 'Location Log',
-        columns: ['Vehicle', 'From Date', 'To Date', 'Location', 'Agent'],
-        row: (entry, vehicleLabel) => [
-            vehicleLabel,
+        columns: ['From Date', 'To Date', 'Location', 'Agent'],
+        row: (entry) => [
             formatDate(entry.fromDate),
             formatDate(entry.toDate),
             entry.location || '',
@@ -2215,9 +2210,8 @@ const REPORT_LOG_CONFIG = {
     },
     mileage: {
         label: 'Mileage Log',
-        columns: ['Vehicle', 'Date', 'Mileage', 'Notes'],
-        row: (entry, vehicleLabel) => [
-            vehicleLabel,
+        columns: ['Date', 'Mileage', 'Notes'],
+        row: (entry) => [
             formatDate(entry.date),
             entry.mileage != null ? entry.mileage.toLocaleString() : '',
             entry.notes || '',
@@ -2402,32 +2396,55 @@ async function generateReportPDF() {
             vehicleLabelById[vehicle._id] = `${vehicle.plate} (${vehicle.make} ${vehicle.model})`;
         });
 
+        const entriesByVehicle = {};
+        entries.forEach(entry => {
+            if (!entriesByVehicle[entry.vehicleId]) entriesByVehicle[entry.vehicleId] = [];
+            entriesByVehicle[entry.vehicleId].push(entry);
+        });
+
         const { jsPDF } = window.jspdf;
         const doc = new jsPDF();
+        const pageHeight = doc.internal.pageSize.getHeight();
 
         doc.setFontSize(16);
         doc.text(`Go Rush Fleet - ${config.label}`, 14, 18);
-
         doc.setFontSize(10);
         doc.text(`Period: ${dateRange.startDate} to ${dateRange.endDate}`, 14, 26);
-        const vehicleNames = selectedVehicleIds.map(id => vehicleLabelById[id] || id).join(', ');
-        const vehicleLine = doc.splitTextToSize(`Vehicles: ${vehicleNames}`, 180);
-        doc.text(vehicleLine, 14, 32);
 
-        const tableStartY = 32 + vehicleLine.length * 5 + 4;
+        let cursorY = 36;
 
-        if (entries.length === 0) {
-            doc.setFontSize(11);
-            doc.text('No records found for this selection.', 14, tableStartY);
-        } else {
-            doc.autoTable({
-                head: [config.columns],
-                body: entries.map(entry => config.row(entry, vehicleLabelById[entry.vehicleId] || entry.vehicleId)),
-                startY: tableStartY,
-                styles: { fontSize: 9 },
-                headStyles: { fillColor: [44, 62, 80] },
-            });
-        }
+        selectedVehicleIds.forEach(vehicleId => {
+            const vehicleLabel = vehicleLabelById[vehicleId] || vehicleId;
+            const vehicleEntries = entriesByVehicle[vehicleId] || [];
+
+            // Leave room for the heading and at least one row before paginating
+            if (cursorY > pageHeight - 40) {
+                doc.addPage();
+                cursorY = 20;
+            }
+
+            doc.setFontSize(12);
+            doc.setFont(undefined, 'bold');
+            doc.text(vehicleLabel, 14, cursorY);
+            doc.setFont(undefined, 'normal');
+            cursorY += 6;
+
+            if (vehicleEntries.length === 0) {
+                doc.setFontSize(10);
+                doc.text('No records found for this period.', 14, cursorY);
+                cursorY += 10;
+            } else {
+                doc.autoTable({
+                    head: [config.columns],
+                    body: vehicleEntries.map(entry => config.row(entry)),
+                    startY: cursorY,
+                    styles: { fontSize: 9 },
+                    headStyles: { fillColor: [44, 62, 80] },
+                    margin: { bottom: 20 },
+                });
+                cursorY = doc.lastAutoTable.finalY + 10;
+            }
+        });
 
         doc.save(`${logType}-report-${dateRange.startDate}-to-${dateRange.endDate}.pdf`);
     } catch (error) {
