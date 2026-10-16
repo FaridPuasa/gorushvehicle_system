@@ -2151,9 +2151,14 @@ async function deleteInsuranceEntry(entryId) {
 }
 // ===== Export Reports =====
 
+function sumCost(entries) {
+    return entries.reduce((sum, e) => sum + (Number(e.cost) || 0), 0);
+}
+
 const REPORT_LOG_CONFIG = {
     maintenance: {
         label: 'Maintenance Log',
+        dateField: 'date',
         columns: ['Date', 'Description', 'Odometer', 'Service Provider', 'Cost', 'Next Service'],
         row: (entry) => [
             formatDate(entry.date),
@@ -2163,9 +2168,12 @@ const REPORT_LOG_CONFIG = {
             entry.cost != null ? `$${Number(entry.cost).toFixed(2)}` : '',
             entry.nextServiceDue ? formatDate(entry.nextServiceDue) : '',
         ],
+        summaryColumns: ['Period', 'Services', 'Total Cost'],
+        summarize: (period, entries) => [period, String(entries.length), `$${sumCost(entries).toFixed(2)}`],
     },
     roadtax: {
         label: 'Road Tax Log',
+        dateField: 'renewalDate',
         columns: ['Tax ID', 'Renewal Date', 'Expiry Date', 'Cost', 'Agent'],
         row: (entry) => [
             entry.taxId || '',
@@ -2174,9 +2182,12 @@ const REPORT_LOG_CONFIG = {
             entry.cost != null ? `$${Number(entry.cost).toFixed(2)}` : '',
             entry.agent || '',
         ],
+        summaryColumns: ['Period', 'Entries', 'Total Cost'],
+        summarize: (period, entries) => [period, String(entries.length), `$${sumCost(entries).toFixed(2)}`],
     },
     fuel: {
         label: 'Fuel Log',
+        dateField: 'date',
         columns: ['Receipt #', 'Date', 'Driver', 'Cost', 'Amount'],
         row: (entry) => [
             entry.receiptNumber || '',
@@ -2185,9 +2196,15 @@ const REPORT_LOG_CONFIG = {
             entry.cost != null ? `$${Number(entry.cost).toFixed(2)}` : '',
             entry.amount || '',
         ],
+        summaryColumns: ['Period', 'Fill-ups', 'Total Cost', 'Total Amount'],
+        summarize: (period, entries) => {
+            const totalAmount = entries.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
+            return [period, String(entries.length), `$${sumCost(entries).toFixed(2)}`, totalAmount.toFixed(2)];
+        },
     },
     insurance: {
         label: 'Insurance Log',
+        dateField: 'renewalDate',
         columns: ['Insurance ID', 'Provider', 'Renewal Date', 'Expiry Date', 'Cost', 'Agent'],
         row: (entry) => [
             entry.insuranceId || '',
@@ -2197,9 +2214,12 @@ const REPORT_LOG_CONFIG = {
             entry.cost != null ? `$${Number(entry.cost).toFixed(2)}` : '',
             entry.agent || '',
         ],
+        summaryColumns: ['Period', 'Entries', 'Total Cost'],
+        summarize: (period, entries) => [period, String(entries.length), `$${sumCost(entries).toFixed(2)}`],
     },
     location: {
         label: 'Location Log',
+        dateField: 'fromDate',
         columns: ['From Date', 'To Date', 'Location', 'Agent'],
         row: (entry) => [
             formatDate(entry.fromDate),
@@ -2207,15 +2227,26 @@ const REPORT_LOG_CONFIG = {
             entry.location || '',
             entry.agent || '',
         ],
+        summaryColumns: ['Period', 'Trips'],
+        summarize: (period, entries) => [period, String(entries.length)],
     },
     mileage: {
         label: 'Mileage Log',
+        dateField: 'date',
         columns: ['Date', 'Mileage', 'Notes'],
         row: (entry) => [
             formatDate(entry.date),
             entry.mileage != null ? entry.mileage.toLocaleString() : '',
             entry.notes || '',
         ],
+        summaryColumns: ['Period', 'Start Mileage', 'End Mileage', 'Distance Covered', 'Readings'],
+        summarize: (period, entries) => {
+            if (entries.length === 0) return [period, '-', '-', '-', '0'];
+            const sorted = [...entries].sort((a, b) => new Date(a.date) - new Date(b.date));
+            const start = Number(sorted[0].mileage) || 0;
+            const end = Number(sorted[sorted.length - 1].mileage) || 0;
+            return [period, start.toLocaleString(), end.toLocaleString(), (end - start).toLocaleString(), String(entries.length)];
+        },
     },
 };
 
@@ -2272,27 +2303,26 @@ function setupReportFeature() {
         });
     }
 
-    const periodType = document.getElementById('report-period-type');
-    if (periodType) {
-        periodType.addEventListener('change', () => {
-            const value = periodType.value;
-            document.getElementById('report-period-daily').style.display = value === 'daily' ? 'block' : 'none';
-            document.getElementById('report-period-weekly').style.display = value === 'weekly' ? 'block' : 'none';
-            document.getElementById('report-period-monthly').style.display = value === 'monthly' ? 'block' : 'none';
-            document.getElementById('report-period-custom').style.display = value === 'custom' ? 'flex' : 'none';
+    document.querySelectorAll('input[name="report-period-type"]').forEach(radio => {
+        radio.addEventListener('change', () => {
+            const value = document.querySelector('input[name="report-period-type"]:checked').value;
+            document.getElementById('report-range-daily').style.display = value === 'daily' ? 'flex' : 'none';
+            document.getElementById('report-range-weekly').style.display = value === 'weekly' ? 'flex' : 'none';
+            document.getElementById('report-range-monthly').style.display = value === 'monthly' ? 'flex' : 'none';
         });
-    }
+    });
 
     const generateBtn = document.getElementById('generate-report-btn');
     if (generateBtn) {
         generateBtn.addEventListener('click', generateReportPDF);
     }
 
-    // Default the daily picker to today
-    const dailyInput = document.getElementById('report-date-daily');
-    if (dailyInput) {
-        dailyInput.value = new Date().toISOString().split('T')[0];
-    }
+    // Default the daily range to today
+    const today = new Date().toISOString().split('T')[0];
+    const startDaily = document.getElementById('report-date-start-daily');
+    const endDaily = document.getElementById('report-date-end-daily');
+    if (startDaily) startDaily.value = today;
+    if (endDaily) endDaily.value = today;
 }
 
 // Converts an ISO week string ("2026-W05") into its Monday/Sunday date range
@@ -2332,32 +2362,66 @@ function getMonthRange(isoMonthValue) {
     };
 }
 
+// Builds one bucket per ISO week from startWeekValue to endWeekValue inclusive
+function generateWeekBuckets(startWeekValue, endWeekValue) {
+    const buckets = [];
+    let currentMonday = new Date(getWeekRange(startWeekValue).startDate + 'T00:00:00Z');
+    const endMonday = new Date(getWeekRange(endWeekValue).startDate + 'T00:00:00Z');
+
+    while (currentMonday <= endMonday) {
+        const start = currentMonday.toISOString().split('T')[0];
+        const endDate = new Date(currentMonday);
+        endDate.setUTCDate(endDate.getUTCDate() + 6);
+        const end = endDate.toISOString().split('T')[0];
+        buckets.push({ label: `Week of ${start}`, start, end });
+        currentMonday.setUTCDate(currentMonday.getUTCDate() + 7);
+    }
+    return buckets;
+}
+
+// Builds one bucket per calendar month from startMonthValue to endMonthValue inclusive
+function generateMonthBuckets(startMonthValue, endMonthValue) {
+    const buckets = [];
+    let [year, month] = startMonthValue.split('-').map(Number);
+    const [endYear, endMonth] = endMonthValue.split('-').map(Number);
+
+    while (year < endYear || (year === endYear && month <= endMonth)) {
+        const monthValue = `${year}-${String(month).padStart(2, '0')}`;
+        const range = getMonthRange(monthValue);
+        const label = new Date(Date.UTC(year, month - 1, 1)).toLocaleString('default', { month: 'long', year: 'numeric' });
+        buckets.push({ label, start: range.startDate, end: range.endDate });
+        month++;
+        if (month > 12) { month = 1; year++; }
+    }
+    return buckets;
+}
+
 function computeReportDateRange() {
-    const periodType = document.getElementById('report-period-type').value;
+    const periodType = document.querySelector('input[name="report-period-type"]:checked').value;
 
     if (periodType === 'daily') {
-        const date = document.getElementById('report-date-daily').value;
-        if (!date) return null;
-        return { startDate: date, endDate: date };
+        const startDate = document.getElementById('report-date-start-daily').value;
+        const endDate = document.getElementById('report-date-end-daily').value;
+        if (!startDate || !endDate) return null;
+        return { periodType, startDate, endDate, buckets: null };
     }
 
     if (periodType === 'weekly') {
-        const week = document.getElementById('report-date-weekly').value;
-        if (!week) return null;
-        return getWeekRange(week);
+        const startWeek = document.getElementById('report-week-start').value;
+        const endWeek = document.getElementById('report-week-end').value;
+        if (!startWeek || !endWeek) return null;
+        const buckets = generateWeekBuckets(startWeek, endWeek);
+        if (buckets.length === 0) return null;
+        return { periodType, startDate: buckets[0].start, endDate: buckets[buckets.length - 1].end, buckets };
     }
 
-    if (periodType === 'monthly') {
-        const month = document.getElementById('report-date-monthly').value;
-        if (!month) return null;
-        return getMonthRange(month);
-    }
-
-    // custom
-    const startDate = document.getElementById('report-date-start').value;
-    const endDate = document.getElementById('report-date-end').value;
-    if (!startDate || !endDate) return null;
-    return { startDate, endDate };
+    // monthly
+    const startMonth = document.getElementById('report-month-start').value;
+    const endMonth = document.getElementById('report-month-end').value;
+    if (!startMonth || !endMonth) return null;
+    const buckets = generateMonthBuckets(startMonth, endMonth);
+    if (buckets.length === 0) return null;
+    return { periodType, startDate: buckets[0].start, endDate: buckets[buckets.length - 1].end, buckets };
 }
 
 async function generateReportPDF() {
@@ -2411,6 +2475,7 @@ async function generateReportPDF() {
         doc.setFontSize(10);
         doc.text(`Period: ${dateRange.startDate} to ${dateRange.endDate}`, 14, 26);
 
+        const isSummary = dateRange.periodType !== 'daily';
         let cursorY = 36;
 
         selectedVehicleIds.forEach(vehicleId => {
@@ -2429,21 +2494,37 @@ async function generateReportPDF() {
             doc.setFont(undefined, 'normal');
             cursorY += 6;
 
-            if (vehicleEntries.length === 0) {
+            if (!isSummary && vehicleEntries.length === 0) {
                 doc.setFontSize(10);
                 doc.text('No records found for this period.', 14, cursorY);
                 cursorY += 10;
-            } else {
-                doc.autoTable({
-                    head: [config.columns],
-                    body: vehicleEntries.map(entry => config.row(entry)),
-                    startY: cursorY,
-                    styles: { fontSize: 9 },
-                    headStyles: { fillColor: [44, 62, 80] },
-                    margin: { bottom: 20 },
-                });
-                cursorY = doc.lastAutoTable.finalY + 10;
+                return;
             }
+
+            let head, body;
+            if (isSummary) {
+                head = [config.summaryColumns];
+                body = dateRange.buckets.map(bucket => {
+                    const bucketEntries = vehicleEntries.filter(entry => {
+                        const value = entry[config.dateField];
+                        return value && value.slice(0, 10) >= bucket.start && value.slice(0, 10) <= bucket.end;
+                    });
+                    return config.summarize(bucket.label, bucketEntries);
+                });
+            } else {
+                head = [config.columns];
+                body = vehicleEntries.map(entry => config.row(entry));
+            }
+
+            doc.autoTable({
+                head,
+                body,
+                startY: cursorY,
+                styles: { fontSize: 9 },
+                headStyles: { fillColor: [44, 62, 80] },
+                margin: { bottom: 20 },
+            });
+            cursorY = doc.lastAutoTable.finalY + 10;
         });
 
         doc.save(`${logType}-report-${dateRange.startDate}-to-${dateRange.endDate}.pdf`);
